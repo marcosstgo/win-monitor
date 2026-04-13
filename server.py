@@ -1164,6 +1164,68 @@ def list_service_analyses(secret: str = Query(...)):
     conn.close()
     return {"analyses": [dict(r) for r in rows]}
 
+# ── Admin ────────────────────────────────────────────────────────────────────
+def require_admin(secret: str):
+    """Solo el usuario marc0 (el que tiene API_SECRET) puede usar endpoints admin."""
+    if secret != API_SECRET:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+@app.get("/api/admin/users")
+def admin_list_users(secret: str = Query(...)):
+    require_admin(secret)
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT u.id, u.name, u.email, u.active, u.created_at,
+               COUNT(DISTINCT e.id)  AS total_events,
+               COUNT(DISTINCT s.id)  AS total_snapshots,
+               MAX(e.received_at)    AS last_event
+        FROM users u
+        LEFT JOIN events    e ON e.user_id = u.id
+        LEFT JOIN snapshots s ON s.user_id = u.id
+        GROUP BY u.id
+        ORDER BY u.id
+    """).fetchall()
+    conn.close()
+    return {"users": [dict(r) for r in rows]}
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, secret: str = Query(...),
+                      active: Optional[int] = Query(default=None),
+                      name: Optional[str] = Query(default=None)):
+    require_admin(secret)
+    conn = get_db()
+    user = conn.execute("SELECT id FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(404, "Usuario no encontrado")
+    if active is not None:
+        conn.execute("UPDATE users SET active=? WHERE id=?", (active, user_id))
+    if name:
+        conn.execute("UPDATE users SET name=? WHERE id=?", (name.strip()[:60], user_id))
+    conn.commit()
+    updated = conn.execute("SELECT id, name, email, active, created_at FROM users WHERE id=?", (user_id,)).fetchone()
+    conn.close()
+    return dict(updated)
+
+@app.delete("/api/admin/users/{user_id}")
+def admin_delete_user(user_id: int, secret: str = Query(...)):
+    require_admin(secret)
+    conn = get_db()
+    user = conn.execute("SELECT id, name FROM users WHERE id=?", (user_id,)).fetchone()
+    if not user:
+        conn.close()
+        raise HTTPException(404, "Usuario no encontrado")
+    # No permitir borrar al admin (marc0)
+    if user["name"] == "marc0":
+        conn.close()
+        raise HTTPException(400, "No se puede eliminar al usuario admin")
+    conn.execute("DELETE FROM events    WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM snapshots WHERE user_id=?", (user_id,))
+    conn.execute("DELETE FROM users     WHERE id=?",      (user_id,))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "deleted": user_id}
+
 # ── Registro ─────────────────────────────────────────────────────────────────
 @app.get("/register", response_class=HTMLResponse)
 def register_page():
