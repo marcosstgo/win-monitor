@@ -1715,8 +1715,9 @@ tailwind.config = {
       <span class="text-xl font-semibold tracking-tight">Vigil</span>
     </div>
     <div class="flex items-center gap-6 text-sm text-white/60">
-      <a href="#features" class="hover:text-white transition-colors">Características</a>
-      <a href="#how" class="hover:text-white transition-colors">Cómo funciona</a>
+      <a href="#features" class="hover:text-white transition-colors hidden sm:block">Características</a>
+      <a href="#how" class="hover:text-white transition-colors hidden sm:block">Cómo funciona</a>
+      <a href="__BASE__/" class="hover:text-white transition-colors">Acceder</a>
       <a href="__BASE__/register" class="bg-brand text-[#003918] font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-all">
         Crear cuenta
       </a>
