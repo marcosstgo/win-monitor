@@ -1957,9 +1957,130 @@ tailwind.config = {
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
-def dashboard(secret: str = Query(...)):
+def dashboard(secret: str = Query(default="")):
+    if not secret:
+        return LOGIN_HTML.replace("__BASE__", BASE_PATH)
     auth(secret)
     return HTML.replace("__SECRET__", secret).replace("__BASE__", BASE_PATH)
+
+LOGIN_HTML = r"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vigil — Acceder</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0e0e0e;
+  color: #e5e2e1;
+  font-family: "Space Grotesk", sans-serif;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.card {
+  width: 100%;
+  max-width: 420px;
+  background: #161616;
+  border: 1px solid #262626;
+  border-radius: 20px;
+  padding: 44px 40px 48px;
+  box-shadow: 0 24px 64px rgba(0,0,0,.55);
+}
+.logo { display: flex; align-items: center; gap-10px; gap: 10px; margin-bottom: 32px; }
+.logo-text { font-size: 20px; font-weight: 700; color: #00e475; letter-spacing: -.4px; }
+.heading { font-size: 22px; font-weight: 700; letter-spacing: -.3px; margin-bottom: 6px; }
+.subheading { font-size: 14px; color: #6b7280; line-height: 1.6; margin-bottom: 28px; }
+.field { margin-bottom: 20px; }
+.field label { display: block; font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: .6px; margin-bottom: 9px; }
+.field input {
+  display: block; width: 100%;
+  background: #1e1e1e; border: 1.5px solid #2e2e2e;
+  color: #e5e2e1; border-radius: 10px; padding: 14px 18px;
+  font-family: "Space Grotesk", sans-serif; font-size: 15px; outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.field input:focus { border-color: #00e475; box-shadow: 0 0 0 3px rgba(0,228,117,.1); }
+.field input::placeholder { color: #3f3f3f; }
+.btn {
+  display: block; width: 100%;
+  background: #00e475; color: #003918;
+  font-family: "Space Grotesk", sans-serif; font-size: 15px; font-weight: 700;
+  border: none; border-radius: 10px; padding: 15px 24px;
+  cursor: pointer; transition: filter .15s, transform .1s; margin-top: 8px;
+}
+.btn:hover { filter: brightness(1.08); }
+.btn:active { transform: scale(.98); }
+.err { font-size: 13px; color: #ffb4ab; text-align: center; margin-top: 12px; display: none; }
+.footer-links { text-align: center; margin-top: 24px; font-size: 13px; color: #4b5563; }
+.footer-links a { color: #6b7280; text-decoration: none; transition: color .15s; }
+.footer-links a:hover { color: #00e475; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <svg width="26" height="26" viewBox="0 0 64 64" fill="none">
+      <circle cx="32" cy="32" r="28" fill="#131313" stroke="#00e475" stroke-width="2.5"/>
+      <ellipse cx="32" cy="32" rx="17" ry="8.5" fill="#00e47510" stroke="#00e475" stroke-width="2"/>
+      <circle cx="32" cy="32" r="7" fill="#00e475"/>
+      <circle cx="29" cy="29" r="2.5" fill="white" opacity=".75"/>
+    </svg>
+    <span class="logo-text">Vigil</span>
+  </div>
+
+  <h1 class="heading">Acceder al dashboard</h1>
+  <p class="subheading">Ingresa tu clave secreta para ver el monitor de tu PC.</p>
+
+  <div class="field">
+    <label for="inp-secret">Clave secreta</label>
+    <input id="inp-secret" type="text" placeholder="vigil-xxxxxxxxxxxxxx"
+           autocomplete="off" spellcheck="false">
+  </div>
+
+  <button class="btn" onclick="doLogin()">Entrar</button>
+  <div class="err" id="err"></div>
+
+  <div class="footer-links">
+    ¿No tienes cuenta? <a href="__BASE__/register">Crear cuenta gratis</a>
+  </div>
+</div>
+
+<script>
+const BASE = "__BASE__";
+
+function doLogin() {
+  const secret = document.getElementById("inp-secret").value.trim();
+  const err    = document.getElementById("err");
+  err.style.display = "none";
+  if (secret.length < 6) {
+    err.textContent = "Clave demasiado corta";
+    err.style.display = "block";
+    return;
+  }
+  // Verificar que la clave es válida antes de redirigir
+  fetch(`${BASE}/api/stats?secret=${encodeURIComponent(secret)}`)
+    .then(r => {
+      if (r.status === 401) throw new Error("Clave incorrecta");
+      window.location.href = `${BASE}/?secret=${encodeURIComponent(secret)}`;
+    })
+    .catch(e => {
+      err.textContent = e.message || "Clave incorrecta";
+      err.style.display = "block";
+    });
+}
+
+document.getElementById("inp-secret").addEventListener("keydown", e => {
+  if (e.key === "Enter") doLogin();
+});
+document.getElementById("inp-secret").focus();
+</script>
+</body>
+</html>"""
 
 HTML = r"""<!DOCTYPE html>
 <html lang="es">
