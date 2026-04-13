@@ -1570,8 +1570,8 @@ document.getElementById("inp-name").focus();
 </html>
 """
 
-CLIENT_VERSION = "1.0.0"
-CLIENT_DOWNLOAD_URL = ""  # URL del .exe en GitHub Releases — actualizar al publicar
+CLIENT_VERSION = "1.1.0"
+CLIENT_DOWNLOAD_URL = "https://github.com/marcosstgo/vigil/releases/download/v1.1.0/Vigil.exe"
 
 @app.get("/api/version")
 def get_version():
