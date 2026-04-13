@@ -172,7 +172,8 @@ $metrics = [PSCustomObject]@{
 def run_ps():
     r = subprocess.run(
         ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", PS_SCRIPT],
-        capture_output=True, text=True, timeout=45
+        capture_output=True, text=True, timeout=45,
+        creationflags=0x08000000  # CREATE_NO_WINDOW — evita que aparezca la ventana de PS
     )
     if not r.stdout.strip():
         return [], {}
