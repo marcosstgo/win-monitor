@@ -983,7 +983,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Windows Monitor — MSI Trident X2</title>
+<title>Vigil — MSI Trident X2</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -1097,7 +1097,7 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
 
   <!-- Logo -->
   <div class="mb-6">
-    <h1 class="text-base font-black text-primary tracking-tighter font-headline leading-none">WIN MONITOR</h1>
+    <h1 class="text-base font-black text-primary tracking-tighter font-headline leading-none">VIGIL</h1>
     <p class="text-[9px] font-headline uppercase tracking-widest text-on-surface-variant mt-1" style="opacity:.4">MSI TRIDENT X2 · marc0</p>
   </div>
 
