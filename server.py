@@ -94,6 +94,20 @@ def init_db():
             analysis      TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_inc_bsod ON incidents(bsod_event_id);
+
+        CREATE TABLE IF NOT EXISTS service_analyses (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at   TEXT NOT NULL,
+            service_name TEXT NOT NULL,
+            category     TEXT,
+            crash_count  INTEGER,
+            analysis     TEXT,
+            action       TEXT,
+            severity     TEXT DEFAULT 'high',
+            resolved     INTEGER DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_svc_name ON service_analyses(service_name);
+        CREATE INDEX IF NOT EXISTS idx_svc_time ON service_analyses(created_at);
     """)
     conn.commit()
     conn.close()
@@ -291,6 +305,79 @@ def auto_incident(bsod_db_id: int):
     conn.close()
 
     run_incident_analysis(inc_id, bsod, chain)
+
+
+def analyze_service_crash(service_name: str, category: str, crash_count: int, crash_events: list, detail_events: list):
+    """Usa Claude para diagnosticar un crash loop de servicio y generar solución específica."""
+    if not CLAUDE_API_KEY:
+        return
+    # No re-analizar si ya hay un análisis reciente (última hora)
+    conn = get_db()
+    recent = conn.execute("""
+        SELECT id FROM service_analyses
+        WHERE service_name=? AND created_at > datetime('now','-1 hour')
+        ORDER BY id DESC LIMIT 1
+    """, (service_name,)).fetchone()
+    if recent:
+        conn.close()
+        return
+    conn.close()
+
+    # Construir contexto para Claude
+    crashes_text = "\n".join(
+        f"  [{e['time_created'][11:19]}] {e['message'][:200]}"
+        for e in crash_events[:5]
+    )
+    details_text = "\n".join(
+        f"  [{e['time_created'][11:19]}] ID={e['event_id']} {e['provider']}: {e['message'][:300]}"
+        for e in detail_events[:8]
+    ) or "  (sin logs de detalle disponibles)"
+
+    prompt = f"""Eres un experto en diagnóstico de Windows. El servicio "{service_name}" (categoría: {category}) ha crasheado {crash_count} veces en las últimas horas en un MSI Trident X2 (Windows 11 25H2, RTX 4090).
+
+EVENTOS DE CRASH (Service Control Manager):
+{crashes_text}
+
+LOGS DE DETALLE DEL SERVICIO (logs operacionales):
+{details_text}
+
+Responde en español con este formato exacto:
+**Causa raíz:** (1-2 líneas — qué está causando el crash específicamente)
+**Diagnóstico:** (qué archivo, recurso, o condición lo desencadena)
+**Solución:** (comandos o pasos exactos y concretos para resolver — sé específico con rutas, comandos, etc.)
+**Urgencia:** (crítico / alto / medio / bajo)"""
+
+    client = anthropic.Anthropic(api_key=CLAUDE_API_KEY)
+    try:
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        analysis_text = resp.content[0].text
+
+        # Extraer la solución del análisis para mostrarla en el issue
+        action = service_name + ": ver análisis"
+        import re as _re2
+        sol_match = _re2.search(r'\*\*Solución:\*\*\s*(.+?)(?:\*\*|$)', analysis_text, _re2.DOTALL)
+        if sol_match:
+            action = sol_match.group(1).strip()[:300]
+
+        urg_match = _re2.search(r'\*\*Urgencia:\*\*\s*(\w+)', analysis_text, _re2.IGNORECASE)
+        severity = "high"
+        if urg_match:
+            u = urg_match.group(1).lower()
+            severity = "critical" if "crít" in u else "medium" if "medio" in u else "low" if "bajo" in u else "high"
+
+        conn2 = get_db()
+        conn2.execute("""
+            INSERT INTO service_analyses (created_at, service_name, category, crash_count, analysis, action, severity)
+            VALUES (?,?,?,?,?,?,?)
+        """, (datetime.now(timezone.utc).isoformat(), service_name, category, crash_count, analysis_text, action, severity))
+        conn2.commit()
+        conn2.close()
+    except Exception:
+        pass
 
 
 def auto_analyze(event_id_db: int):
@@ -524,7 +611,7 @@ def get_issues(secret: str = Query(...)):
     import re as _re
     loops = conn.execute("""
         SELECT event_id, message, COUNT(*) as cnt,
-               MAX(time_created) as last_seen
+               MAX(time_created) as last_seen, MIN(id) as first_id
         FROM events
         WHERE event_id IN (7031,7034,7023,7024)
           AND time_created > datetime('now','-6 hours')
@@ -536,28 +623,69 @@ def get_issues(secret: str = Query(...)):
     seen_services = set()
     for row in loops:
         msg = row["message"] or ""
-        # Extraer nombre del servicio del mensaje: "The X service terminated..."
         m = _re.search(r"The (.+?) service (terminated|crashed|stopped)", msg, _re.IGNORECASE)
         svc_name = m.group(1).strip() if m else "Servicio desconocido"
-        svc_key = svc_name.lower()
+        svc_cat  = categorize(row["event_id"], "Service Control Manager", msg)
+        svc_key  = svc_name.lower()
         if svc_key in seen_services:
             continue
         seen_services.add(svc_key)
-        # Buscar accion conocida
-        action = next(
-            (act for key, (act, _) in SERVICE_ACTIONS.items() if key in svc_key),
-            f"Revisar Event Viewer → System, buscar errores relacionados con '{svc_name}' y ejecutar sfc /scannow"
-        )
-        severity = next(
-            (sev for key, (_, sev) in SERVICE_ACTIONS.items() if key in svc_key),
-            "high"
-        )
+
+        # Buscar análisis previo de Claude para este servicio
+        claude_analysis = conn.execute("""
+            SELECT action, analysis, severity FROM service_analyses
+            WHERE service_name=? ORDER BY id DESC LIMIT 1
+        """, (svc_name,)).fetchone()
+
+        if claude_analysis and claude_analysis["action"]:
+            action   = claude_analysis["action"]
+            severity = claude_analysis["severity"] or "high"
+            has_ai   = True
+        else:
+            # Fallback a acciones conocidas
+            action = next(
+                (act for key, (act, _) in SERVICE_ACTIONS.items() if key in svc_key),
+                f"Revisar logs operacionales de '{svc_name}'. Ejecutar sfc /scannow como admin."
+            )
+            severity = next(
+                (sev for key, (_, sev) in SERVICE_ACTIONS.items() if key in svc_key),
+                "high"
+            )
+            has_ai = False
+
+        # Recopilar eventos de detalle relacionados para análisis Claude en background
+        crash_evts = conn.execute("""
+            SELECT time_created, message FROM events
+            WHERE event_id IN (7031,7034,7023,7024)
+              AND message LIKE ? AND time_created > datetime('now','-6 hours')
+            ORDER BY id DESC LIMIT 5
+        """, (f"%{svc_name}%",)).fetchall()
+        crash_evts = [dict(e) for e in crash_evts]
+
+        # Buscar logs operacionales del mismo servicio (Defender, WMI, etc.)
+        detail_evts = conn.execute("""
+            SELECT time_created, event_id, provider, message FROM events
+            WHERE category IN ('ANTIVIRUS','DRIVER','ACTUALIZACION','RED','SERVICIO')
+              AND event_id NOT IN (7031,7034,7023,7024)
+              AND time_created > datetime('now','-6 hours')
+            ORDER BY id DESC LIMIT 10
+        """).fetchall()
+        detail_evts = [dict(e) for e in detail_evts]
+
+        if not has_ai and len(crash_evts) >= 3:
+            threading.Thread(
+                target=analyze_service_crash,
+                args=(svc_name, svc_cat, row["cnt"], crash_evts, detail_evts),
+                daemon=True
+            ).start()
+
         issues.append({
-            "severity": severity,
-            "type":     "CRASH_LOOP",
-            "title":    f"{svc_name} se detuvo {row['cnt']}x en 6h",
-            "detail":   msg[:150] if msg else "Loop de reinicios detectado",
-            "action":   action
+            "severity":  severity,
+            "type":      "CRASH_LOOP",
+            "title":     f"{svc_name} se detuvo {row['cnt']}x en 6h",
+            "detail":    claude_analysis["analysis"] if (has_ai and claude_analysis and claude_analysis["analysis"]) else (msg[:150] if msg else "Loop de reinicios detectado"),
+            "action":    action,
+            "ai_analyzed": has_ai
         })
 
     # App crashes en loop (3+ veces en 2h, event 1000)
@@ -573,14 +701,18 @@ def get_issues(secret: str = Query(...)):
     """).fetchall()
     for row in app_loops:
         msg = row["message"] or ""
-        m = _re.search(r"Faulting application name: ([^,]+)", msg)
+        m = _re.search(r"Faulting application name: ([^,\r\n]+)", msg)
         app_name = m.group(1).strip() if m else "Aplicación desconocida"
+        exc_m = _re.search(r"Exception code: (0x[0-9a-fA-F]+)", msg)
+        mod_m = _re.search(r"Faulting module name: ([^,\r\n]+)", msg)
+        detail = f"Módulo: {mod_m.group(1).strip() if mod_m else '?'} | Excepción: {exc_m.group(1) if exc_m else '?'}"
         issues.append({
-            "severity": "high",
-            "type":     "CRASH_LOOP",
-            "title":    f"{app_name} crasheó {row['cnt']}x en 2h",
-            "detail":   msg[:150],
-            "action":   f"Reinstalar {app_name} o revisar extensiones/plugins. Verificar logs en %LOCALAPPDATA%\\CrashDumps"
+            "severity":    "high",
+            "type":        "CRASH_LOOP",
+            "title":       f"{app_name} crasheó {row['cnt']}x en 2h",
+            "detail":      detail,
+            "action":      f"Reinstalar {app_name} o revisar extensiones/plugins. Verificar dumps en %LOCALAPPDATA%\\CrashDumps",
+            "ai_analyzed": False
         })
 
     # Errores de disco en las últimas 24h
@@ -829,6 +961,17 @@ def recategorize(secret: str = Query(...)):
     updated = recategorize_db()
     return {"updated": updated}
 
+@app.get("/api/service_analyses")
+def list_service_analyses(secret: str = Query(...)):
+    """Retorna todos los diagnósticos AI de servicios crasheados."""
+    auth(secret)
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT * FROM service_analyses ORDER BY id DESC LIMIT 50
+    """).fetchall()
+    conn.close()
+    return {"analyses": [dict(r) for r in rows]}
+
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def dashboard(secret: str = Query(...)):
@@ -898,6 +1041,13 @@ body{background:#09090f;color:#e2e8f0;font-family:'Segoe UI',system-ui,sans-seri
 .sb-tot     .sb-val{color:#64748b}
 .sb-browser .sb-val{color:#38bdf8}
 .sb-uptime  .sb-val{font-size:13px;color:#94a3b8;margin-top:4px}
+
+/* AI badge */
+.ai-badge{background:#1e1b4b;color:#a5b4fc;border-radius:3px;padding:1px 6px;font-size:9px;font-weight:700;letter-spacing:.3px;vertical-align:middle}
+.issue-detail{font-size:10px;color:#374151;margin-top:3px;font-style:italic;overflow:hidden;max-height:0;transition:max-height .3s}
+.issue-detail.open{max-height:200px}
+.issue-toggle{font-size:10px;color:#4338ca;cursor:pointer;margin-top:4px;display:inline-block}
+.issue-toggle:hover{color:#818cf8}
 
 /* Smart health badges */
 .smart-row{display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px}
@@ -1363,14 +1513,41 @@ function renderIssues(issues) {
     bar.style.display = "none"; ok.style.display = "flex"; return;
   }
   ok.style.display = "none"; bar.style.display = "";
-  list.innerHTML = issues.map(i => `
+  list.innerHTML = issues.map((i,idx) => {
+    const aiBadge = i.ai_analyzed
+      ? `<span class="ai-badge" title="Diagnóstico generado por Claude AI">IA</span> `
+      : '';
+    // For AI-analyzed issues, show a toggle to expand full analysis
+    const detailId = `issue-detail-${idx}`;
+    const toggleId = `issue-toggle-${idx}`;
+    const toggleHtml = i.ai_analyzed
+      ? `<span class="issue-toggle" id="${toggleId}" onclick="toggleIssueDetail('${detailId}','${toggleId}')">▶ Ver diagnóstico completo</span>`
+      : '';
+    const detailHtml = i.ai_analyzed && i.detail
+      ? `<div class="issue-detail" id="${detailId}">${escHtml(i.detail)}</div>`
+      : '';
+    return `
     <div class="issue ${i.severity}">
       <div class="issue-dot"></div>
       <div class="issue-body">
-        <div class="issue-title">${i.title}</div>
-        <div class="issue-action">→ ${i.action}</div>
+        <div class="issue-title">${escHtml(i.title)}</div>
+        <div class="issue-action">${aiBadge}→ ${escHtml(i.action)}</div>
+        ${detailHtml}${toggleHtml}
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
+}
+
+function toggleIssueDetail(detailId, toggleId) {
+  const d = document.getElementById(detailId);
+  const t = document.getElementById(toggleId);
+  if (!d) return;
+  const open = d.classList.toggle("open");
+  if (t) t.textContent = (open ? "▼ " : "▶ ") + "Ver diagnóstico completo";
+}
+
+function escHtml(s) {
+  return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
 function renderIncidents(incidents) {

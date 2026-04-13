@@ -25,14 +25,29 @@ PS_SCRIPT = r"""
 $results = @()
 
 $targets = @(
-    @{ Log = 'System';      MaxEvents = 300; MaxLevel = 3 },
-    @{ Log = 'Application'; MaxEvents = 200; MaxLevel = 2 }
+    @{ Log = 'System';      MaxEvents = 300; MaxLevel = 3; FilterIds = $null },
+    @{ Log = 'Application'; MaxEvents = 200; MaxLevel = 2; FilterIds = $null },
+    # Logs operacionales — capturan el detalle del "por que" crasheo un servicio
+    @{ Log = 'Microsoft-Windows-Windows Defender/Operational';
+       MaxEvents = 50; MaxLevel = 2;
+       FilterIds = @(1006,1007,1008,5004,5007,5008,5009,5010,5012,3002,3007) },
+    @{ Log = 'Microsoft-Windows-WindowsUpdateClient/Operational';
+       MaxEvents = 30; MaxLevel = 2;
+       FilterIds = @(20,25,31,34) },
+    @{ Log = 'Microsoft-Windows-WLAN-AutoConfig/Operational';
+       MaxEvents = 20; MaxLevel = 2; FilterIds = $null },
+    @{ Log = 'Microsoft-Windows-Ntfs/Operational';
+       MaxEvents = 20; MaxLevel = 2; FilterIds = $null },
+    @{ Log = 'Microsoft-Windows-DriverFrameworks-UserMode/Operational';
+       MaxEvents = 20; MaxLevel = 2; FilterIds = $null }
 )
 
 foreach ($t in $targets) {
     try {
-        $events = Get-WinEvent -LogName $t.Log -MaxEvents $t.MaxEvents -ErrorAction SilentlyContinue |
+        $raw = Get-WinEvent -LogName $t.Log -MaxEvents $t.MaxEvents -ErrorAction SilentlyContinue |
             Where-Object { $_.Level -gt 0 -and $_.Level -le $t.MaxLevel }
+        if ($t.FilterIds) { $raw = $raw | Where-Object { $_.Id -in $t.FilterIds } }
+        $events = $raw
         foreach ($e in $events) {
             $msg = ''
             try { $msg = $e.Message } catch {}
