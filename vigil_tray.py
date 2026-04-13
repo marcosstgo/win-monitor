@@ -56,8 +56,25 @@ except Exception as e:
     _boot_log(f"ERROR EN ARRANQUE: {e}\n{traceback.format_exc()}")
     sys.exit(1)
 
+# ── Single instance (mutex global) ───────────────────────────────────────────
+_MUTEX_NAME = "Global\\VIGILSingleInstance"
+_mutex_handle = None
+
+def acquire_single_instance() -> bool:
+    """Crea un mutex global. Retorna True si somos la única instancia, False si ya hay una."""
+    global _mutex_handle
+    _mutex_handle = ctypes.windll.kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    err = ctypes.windll.kernel32.GetLastError()
+    ERROR_ALREADY_EXISTS = 183
+    if err == ERROR_ALREADY_EXISTS:
+        if _mutex_handle:
+            ctypes.windll.kernel32.CloseHandle(_mutex_handle)
+            _mutex_handle = None
+        return False
+    return True
+
 # ── Constantes ────────────────────────────────────────────────────────────────
-VERSION      = "1.0.0"
+VERSION      = "1.1.0"
 APP_NAME     = "Vigil"
 CONFIG_DIR   = Path(os.environ["APPDATA"]) / "Vigil"
 CONFIG_FILE  = CONFIG_DIR / "config.json"
@@ -416,6 +433,15 @@ def start_tray(cfg):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
+    if not acquire_single_instance():
+        ctypes.windll.user32.MessageBoxW(
+            0,
+            "Vigil ya está corriendo en el system tray.",
+            "Vigil",
+            0x40  # MB_ICONINFORMATION
+        )
+        return
+
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     set_autorun(True)  # Auto-registrar en startup al primer arranque
 
