@@ -1,4 +1,4 @@
-import os, sqlite3, threading, time
+import os, sqlite3, threading, time, secrets, string
 import urllib.request, urllib.parse
 from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Query, BackgroundTasks
@@ -114,28 +114,54 @@ def init_db():
         );
         CREATE INDEX IF NOT EXISTS idx_svc_name ON service_analyses(service_name);
         CREATE INDEX IF NOT EXISTS idx_svc_time ON service_analyses(created_at);
+
+        CREATE TABLE IF NOT EXISTS users (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            name       TEXT NOT NULL,
+            email      TEXT,
+            secret     TEXT NOT NULL UNIQUE,
+            active     INTEGER DEFAULT 1
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_secret ON users(secret);
     """)
     conn.commit()
     conn.close()
 
 init_db()
 
-# ── Migraciones (añade columnas nuevas a snapshots si no existen)
+# ── Migraciones
 def migrate_db():
     conn = get_db()
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
-    new_cols = [
-        ("gpu_percent",       "INTEGER"),
-        ("gpu_vram_used_mb",  "INTEGER"),
-        ("gpu_vram_total_mb", "INTEGER"),
-        ("disk_read_mbps",    "REAL"),
-        ("disk_write_mbps",   "REAL"),
-        ("smart_disks",       "TEXT"),
-        ("browser_crashes",   "INTEGER"),
-    ]
-    for col, typ in new_cols:
-        if col not in existing:
+
+    # Columnas nuevas en snapshots
+    snap_cols = {row[1] for row in conn.execute("PRAGMA table_info(snapshots)").fetchall()}
+    for col, typ in [
+        ("gpu_percent","INTEGER"),("gpu_vram_used_mb","INTEGER"),
+        ("gpu_vram_total_mb","INTEGER"),("disk_read_mbps","REAL"),
+        ("disk_write_mbps","REAL"),("smart_disks","TEXT"),
+        ("browser_crashes","INTEGER"),("user_id","INTEGER"),
+    ]:
+        if col not in snap_cols:
             conn.execute(f"ALTER TABLE snapshots ADD COLUMN {col} {typ}")
+
+    # user_id en events
+    ev_cols = {row[1] for row in conn.execute("PRAGMA table_info(events)").fetchall()}
+    if "user_id" not in ev_cols:
+        conn.execute("ALTER TABLE events ADD COLUMN user_id INTEGER")
+
+    # Crear usuario marc0 si no existe (migra datos existentes)
+    marc0 = conn.execute("SELECT id FROM users WHERE secret=?", (API_SECRET,)).fetchone()
+    if not marc0:
+        now = datetime.now(timezone.utc).isoformat()
+        cur = conn.execute(
+            "INSERT INTO users (created_at,name,email,secret) VALUES (?,?,?,?)",
+            (now, "marc0", "marc0@vigil", API_SECRET)
+        )
+        marc0_id = cur.lastrowid
+        # Asignar eventos y snapshots existentes a marc0
+        conn.execute("UPDATE events    SET user_id=? WHERE user_id IS NULL", (marc0_id,))
+        conn.execute("UPDATE snapshots SET user_id=? WHERE user_id IS NULL", (marc0_id,))
     conn.commit()
     conn.close()
 
@@ -602,15 +628,32 @@ def notify_crash_loop(svc_name: str, count: int, action: str, hostname: str = ""
     )
     send_telegram(text, key=f"loop-{svc_name.lower()}", cooldown=1800)
 
-# ── Auth ─────────────────────────────────────────────────────────────────────
-def auth(secret: str):
-    if secret != API_SECRET:
+# ── Auth & Users ─────────────────────────────────────────────────────────────
+def make_secret() -> str:
+    alphabet = string.ascii_lowercase + string.digits
+    token = "".join(secrets.choice(alphabet) for _ in range(14))
+    return f"vigil-{token}"
+
+def get_user(secret: str) -> dict:
+    """Retorna el usuario dado su secret, o lanza 401."""
+    conn = get_db()
+    row  = conn.execute(
+        "SELECT id, name, email FROM users WHERE secret=? AND active=1", (secret,)
+    ).fetchone()
+    conn.close()
+    if not row:
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return {"id": row["id"], "name": row["name"], "email": row["email"]}
+
+def auth(secret: str):
+    """Compatibilidad — solo valida, no retorna usuario."""
+    get_user(secret)
 
 # ── API ──────────────────────────────────────────────────────────────────────
 @app.post("/api/events")
 def receive_events(batch: EventBatch, bg: BackgroundTasks):
-    auth(batch.secret)
+    user = get_user(batch.secret)
+    uid  = user["id"]
     conn = get_db()
     now  = datetime.now(timezone.utc).isoformat()
     count = 0
@@ -623,23 +666,23 @@ def receive_events(batch: EventBatch, bg: BackgroundTasks):
             INSERT INTO snapshots (received_at,hostname,username,mem_total_mb,mem_free_mb,
                 mem_percent,cpu_percent,uptime_minutes,gpu_temp,gpu_percent,gpu_vram_used_mb,
                 gpu_vram_total_mb,cpu_temp,disk_read_mbps,disk_write_mbps,smart_disks,
-                browser_crashes,disks)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                browser_crashes,disks,user_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (now, m.hostname, m.username, m.mem_total_mb, m.mem_free_mb,
               m.mem_percent, m.cpu_percent, m.uptime_minutes, m.gpu_temp, m.gpu_percent,
               m.gpu_vram_used_mb, m.gpu_vram_total_mb, m.cpu_temp, m.disk_read_mbps,
-              m.disk_write_mbps, m.smart_disks, m.browser_crashes, m.disks))
+              m.disk_write_mbps, m.smart_disks, m.browser_crashes, m.disks, uid))
 
     for e in batch.events:
         cat = categorize(e.event_id, e.provider, e.message)
         cur = conn.execute("""
             INSERT INTO events (received_at,time_created,event_id,level,level_name,
-                log_name,provider,message,category,hostname,username)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                log_name,provider,message,category,hostname,username,user_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
         """, (now, e.time_created, e.event_id, e.level, e.level_name,
               e.log_name, e.provider, e.message[:3000], cat,
               batch.metrics.hostname if batch.metrics else None,
-              batch.metrics.username if batch.metrics else None))
+              batch.metrics.username if batch.metrics else None, uid))
         count += 1
         # Auto-analizar BSODs y disk errors críticos
         # BSOD IDs (ej: 1001/BugCheck) pueden ser level=4 (Information) — se incluyen explícitamente
@@ -670,16 +713,18 @@ def receive_events(batch: EventBatch, bg: BackgroundTasks):
 def list_events(secret: str = Query(...), limit: int = 100, offset: int = 0,
                 level: Optional[int] = None, log_name: Optional[str] = None,
                 category: Optional[str] = None):
-    auth(secret)
+    user = get_user(secret)
+    uid  = user["id"]
     conn = get_db()
-    where, params = [], []
+    where  = ["user_id = ?"]
+    params = [uid]
     if level:
         where.append("level <= ?"); params.append(level)
     if log_name:
         where.append("log_name = ?"); params.append(log_name)
     if category:
         where.append("category = ?"); params.append(category)
-    w = ("WHERE " + " AND ".join(where)) if where else ""
+    w     = "WHERE " + " AND ".join(where)
     rows  = conn.execute(f"SELECT * FROM events {w} ORDER BY id DESC LIMIT ? OFFSET ?",
                          params + [limit, offset]).fetchall()
     total = conn.execute(f"SELECT COUNT(*) FROM events {w}", params).fetchone()[0]
@@ -688,37 +733,37 @@ def list_events(secret: str = Query(...), limit: int = 100, offset: int = 0,
 
 @app.get("/api/stats")
 def stats(secret: str = Query(...)):
-    auth(secret)
-    conn = get_db()
+    user  = get_user(secret)
+    uid   = user["id"]
+    conn  = get_db()
     today = datetime.now().strftime("%Y-%m-%d")
-    snap  = conn.execute("SELECT * FROM snapshots ORDER BY id DESC LIMIT 1").fetchone()
+    snap  = conn.execute("SELECT * FROM snapshots WHERE user_id=? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
     s = {
-        "total":           conn.execute("SELECT COUNT(*) FROM events").fetchone()[0],
-        "critical_today":  conn.execute("SELECT COUNT(*) FROM events WHERE level=1 AND time_created LIKE ?", (f"{today}%",)).fetchone()[0],
-        "errors_today":    conn.execute("SELECT COUNT(*) FROM events WHERE level=2 AND time_created LIKE ?", (f"{today}%",)).fetchone()[0],
-        "warnings_today":  conn.execute("SELECT COUNT(*) FROM events WHERE level=3 AND time_created LIKE ?", (f"{today}%",)).fetchone()[0],
-        "bsods_today":     conn.execute("SELECT COUNT(*) FROM events WHERE event_id IN (41,1001) AND time_created LIKE ?", (f"{today}%",)).fetchone()[0],
-        "last_event":      conn.execute("SELECT received_at FROM events ORDER BY id DESC LIMIT 1").fetchone(),
-        "snapshot":        dict(snap) if snap else None,
+        "total":          conn.execute("SELECT COUNT(*) FROM events WHERE user_id=?", (uid,)).fetchone()[0],
+        "critical_today": conn.execute("SELECT COUNT(*) FROM events WHERE user_id=? AND level=1 AND time_created LIKE ?", (uid, f"{today}%")).fetchone()[0],
+        "errors_today":   conn.execute("SELECT COUNT(*) FROM events WHERE user_id=? AND level=2 AND time_created LIKE ?", (uid, f"{today}%")).fetchone()[0],
+        "warnings_today": conn.execute("SELECT COUNT(*) FROM events WHERE user_id=? AND level=3 AND time_created LIKE ?", (uid, f"{today}%")).fetchone()[0],
+        "bsods_today":    conn.execute("SELECT COUNT(*) FROM events WHERE user_id=? AND event_id IN (41,1001) AND time_created LIKE ?", (uid, f"{today}%")).fetchone()[0],
+        "snapshot":       dict(snap) if snap else None,
     }
-    if s["last_event"]: s["last_event"] = s["last_event"][0]
     conn.close()
     return s
 
 @app.get("/api/issues")
 def get_issues(secret: str = Query(...)):
     """Detecta patrones problemáticos activos."""
-    auth(secret)
+    user = get_user(secret)
+    uid  = user["id"]
     conn = get_db()
     issues = []
 
     # BSODs en las últimas 24h
     bsod_count = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE event_id IN (41,1001,6008) AND time_created > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND event_id IN (41,1001,6008) AND time_created > datetime('now','-24 hours')", (uid,)
     ).fetchone()[0]
     if bsod_count >= 1:
         last_bsod = conn.execute(
-            "SELECT time_created, message FROM events WHERE event_id IN (41,1001) ORDER BY id DESC LIMIT 1"
+            "SELECT time_created, message FROM events WHERE user_id=? AND event_id IN (41,1001) ORDER BY id DESC LIMIT 1", (uid,)
         ).fetchone()
         issues.append({
             "severity": "critical",
@@ -753,13 +798,13 @@ def get_issues(secret: str = Query(...)):
         SELECT event_id, message, COUNT(*) as cnt,
                MAX(time_created) as last_seen, MIN(id) as first_id
         FROM events
-        WHERE event_id IN (7031,7034,7023,7024)
+        WHERE user_id=? AND event_id IN (7031,7034,7023,7024)
           AND time_created > datetime('now','-6 hours')
         GROUP BY event_id, message
         HAVING COUNT(*) >= 3
         ORDER BY cnt DESC
         LIMIT 10
-    """).fetchall()
+    """, (uid,)).fetchall()
     seen_services = set()
     for row in loops:
         msg = row["message"] or ""
@@ -796,20 +841,20 @@ def get_issues(secret: str = Query(...)):
         # Recopilar eventos de detalle relacionados para análisis Claude en background
         crash_evts = conn.execute("""
             SELECT time_created, message FROM events
-            WHERE event_id IN (7031,7034,7023,7024)
+            WHERE user_id=? AND event_id IN (7031,7034,7023,7024)
               AND message LIKE ? AND time_created > datetime('now','-6 hours')
             ORDER BY id DESC LIMIT 5
-        """, (f"%{svc_name}%",)).fetchall()
+        """, (uid, f"%{svc_name}%")).fetchall()
         crash_evts = [dict(e) for e in crash_evts]
 
         # Buscar logs operacionales del mismo servicio (Defender, WMI, etc.)
         detail_evts = conn.execute("""
             SELECT time_created, event_id, provider, message FROM events
-            WHERE category IN ('ANTIVIRUS','DRIVER','ACTUALIZACION','RED','SERVICIO')
+            WHERE user_id=? AND category IN ('ANTIVIRUS','DRIVER','ACTUALIZACION','RED','SERVICIO')
               AND event_id NOT IN (7031,7034,7023,7024)
               AND time_created > datetime('now','-6 hours')
             ORDER BY id DESC LIMIT 10
-        """).fetchall()
+        """, (uid,)).fetchall()
         detail_evts = [dict(e) for e in detail_evts]
 
         if not has_ai and len(crash_evts) >= 3:
@@ -839,13 +884,13 @@ def get_issues(secret: str = Query(...)):
     app_loops = conn.execute("""
         SELECT message, COUNT(*) as cnt
         FROM events
-        WHERE event_id = 1000
+        WHERE user_id=? AND event_id = 1000
           AND time_created > datetime('now','-2 hours')
         GROUP BY message
         HAVING COUNT(*) >= 3
         ORDER BY cnt DESC
         LIMIT 5
-    """).fetchall()
+    """, (uid,)).fetchall()
     for row in app_loops:
         msg = row["message"] or ""
         m = _re.search(r"Faulting application name: ([^,\r\n]+)", msg)
@@ -864,7 +909,7 @@ def get_issues(secret: str = Query(...)):
 
     # Errores de disco en las últimas 24h
     disk_errors = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='DISCO' AND time_created > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='DISCO' AND time_created > datetime('now','-24 hours')", (uid,)
     ).fetchone()[0]
     if disk_errors >= 3:
         issues.append({
@@ -877,7 +922,7 @@ def get_issues(secret: str = Query(...)):
 
     # GPU/Driver errors
     gpu_errors = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='GPU' AND time_created > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='GPU' AND time_created > datetime('now','-24 hours')", (uid,)
     ).fetchone()[0]
     if gpu_errors >= 2:
         issues.append({
@@ -890,7 +935,7 @@ def get_issues(secret: str = Query(...)):
 
     # Antivirus crasheando
     av_errors = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='ANTIVIRUS' AND time_created > datetime('now','-6 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='ANTIVIRUS' AND time_created > datetime('now','-6 hours')", (uid,)
     ).fetchone()[0]
     if av_errors >= 2:
         issues.append({
@@ -903,11 +948,11 @@ def get_issues(secret: str = Query(...)):
 
     # RED — errores de red repetidos
     net_errors = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='RED' AND time_created > datetime('now','-2 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='RED' AND time_created > datetime('now','-2 hours')", (uid,)
     ).fetchone()[0]
     if net_errors >= 3:
         last_net = conn.execute(
-            "SELECT provider, message FROM events WHERE category='RED' ORDER BY id DESC LIMIT 1"
+            "SELECT provider, message FROM events WHERE user_id=? AND category='RED' ORDER BY id DESC LIMIT 1", (uid,)
         ).fetchone()
         issues.append({
             "severity": "medium",
@@ -919,7 +964,7 @@ def get_issues(secret: str = Query(...)):
 
     # DRIVER — fallo al cargar driver
     driver_errors = conn.execute(
-        "SELECT COUNT(*), message FROM events WHERE category='DRIVER' AND time_created > datetime('now','-24 hours') LIMIT 1"
+        "SELECT COUNT(*), message FROM events WHERE user_id=? AND category='DRIVER' AND time_created > datetime('now','-24 hours') LIMIT 1", (uid,)
     ).fetchone()
     if driver_errors and driver_errors[0] >= 1:
         issues.append({
@@ -932,7 +977,7 @@ def get_issues(secret: str = Query(...)):
 
     # ENERGIA — apagados inesperados (que no sean BSODs)
     power_events = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='ENERGIA' AND time_created > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='ENERGIA' AND time_created > datetime('now','-24 hours')", (uid,)
     ).fetchone()[0]
     if power_events >= 2:
         issues.append({
@@ -945,7 +990,7 @@ def get_issues(secret: str = Query(...)):
 
     # BROWSER — crashes de browsers
     browser_crashes = conn.execute(
-        "SELECT COUNT(*), message FROM events WHERE category='BROWSER' AND time_created > datetime('now','-24 hours') LIMIT 1"
+        "SELECT COUNT(*), message FROM events WHERE user_id=? AND category='BROWSER' AND time_created > datetime('now','-24 hours') LIMIT 1", (uid,)
     ).fetchone()
     if browser_crashes and browser_crashes[0] >= 3:
         issues.append({
@@ -958,7 +1003,7 @@ def get_issues(secret: str = Query(...)):
 
     # SEGURIDAD — fallos de autenticación repetidos
     sec_events = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='SEGURIDAD' AND event_id=4625 AND time_created > datetime('now','-1 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='SEGURIDAD' AND event_id=4625 AND time_created > datetime('now','-1 hours')", (uid,)
     ).fetchone()[0]
     if sec_events >= 5:
         issues.append({
@@ -971,7 +1016,7 @@ def get_issues(secret: str = Query(...)):
 
     # ACTUALIZACION — fallos de update
     update_fails = conn.execute(
-        "SELECT COUNT(*) FROM events WHERE category='ACTUALIZACION' AND level <= 2 AND time_created > datetime('now','-24 hours')"
+        "SELECT COUNT(*) FROM events WHERE user_id=? AND category='ACTUALIZACION' AND level <= 2 AND time_created > datetime('now','-24 hours')", (uid,)
     ).fetchone()[0]
     if update_fails >= 1:
         issues.append({
@@ -1118,6 +1163,226 @@ def list_service_analyses(secret: str = Query(...)):
     """).fetchall()
     conn.close()
     return {"analyses": [dict(r) for r in rows]}
+
+# ── Registro ─────────────────────────────────────────────────────────────────
+@app.get("/register", response_class=HTMLResponse)
+def register_page():
+    return REGISTER_HTML.replace("__BASE__", BASE_PATH)
+
+@app.post("/api/register")
+def register(name: str = Query(...), email: str = Query(default="")):
+    name = name.strip()
+    if not name or len(name) < 2:
+        raise HTTPException(400, "Nombre requerido (mínimo 2 caracteres)")
+    secret = make_secret()
+    now    = datetime.now(timezone.utc).isoformat()
+    conn   = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO users (created_at, name, email, secret) VALUES (?,?,?,?)",
+            (now, name[:60], email[:120], secret)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(409, "Error al crear usuario")
+    conn.close()
+    return {"secret": secret, "name": name, "dashboard": f"{BASE_PATH}/?secret={secret}"}
+
+REGISTER_HTML = r"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vigil — Registro</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        "primary":                  "#00e475",
+        "on-primary":               "#003918",
+        "surface":                  "#131313",
+        "surface-container":        "#201f1f",
+        "surface-container-high":   "#2a2a2a",
+        "on-surface":               "#e5e2e1",
+        "on-surface-variant":       "#c6c6cb",
+        "outline-variant":          "#45474b",
+        "error":                    "#ffb4ab",
+      },
+      fontFamily: {
+        headline: ["Space Grotesk","sans-serif"],
+        body:     ["Inter","sans-serif"],
+      },
+    }
+  }
+}
+</script>
+<style>
+body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
+input{background:#201f1f;border:1px solid #45474b;color:#e5e2e1;border-radius:4px;
+  padding:10px 14px;width:100%;outline:none;font-family:'Inter',sans-serif;font-size:14px}
+input:focus{border-color:#00e475}
+input::placeholder{color:#6b7280}
+.btn{background:#00e475;color:#003918;font-weight:600;border:none;border-radius:4px;
+  padding:11px 24px;cursor:pointer;font-family:'Space Grotesk',sans-serif;font-size:14px;
+  letter-spacing:.3px;transition:opacity .15s;width:100%}
+.btn:hover{opacity:.88}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.secret-box{background:#0a1a0f;border:1px solid #00e475;border-radius:6px;
+  padding:16px 20px;font-family:'Space Grotesk',monospace;font-size:15px;
+  color:#00e475;word-break:break-all;letter-spacing:.5px}
+</style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+<div style="width:100%;max-width:420px">
+
+  <!-- Logo -->
+  <div class="mb-8 text-center">
+    <div style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:700;color:#00e475;letter-spacing:-0.5px">
+      Vigil
+    </div>
+    <div style="color:#6b7280;font-size:13px;margin-top:4px">Monitor de sistema</div>
+  </div>
+
+  <!-- Card -->
+  <div style="background:#1c1b1b;border:1px solid #2a2a2a;border-radius:8px;padding:28px 28px 32px">
+
+    <!-- Formulario -->
+    <div id="form-section">
+      <h2 style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:600;margin-bottom:6px">
+        Crear cuenta
+      </h2>
+      <p style="color:#6b7280;font-size:13px;margin-bottom:24px;line-height:1.5">
+        Genera tu clave secreta para empezar a monitorear.
+      </p>
+
+      <div class="mb-4">
+        <label style="display:block;font-size:12px;font-weight:500;color:#9ca3af;margin-bottom:6px;letter-spacing:.4px;text-transform:uppercase">
+          Nombre
+        </label>
+        <input id="inp-name" type="text" placeholder="ej. marc0" maxlength="60" autocomplete="off">
+        <div id="err-name" style="color:#ffb4ab;font-size:12px;margin-top:5px;display:none"></div>
+      </div>
+
+      <div class="mb-6">
+        <label style="display:block;font-size:12px;font-weight:500;color:#9ca3af;margin-bottom:6px;letter-spacing:.4px;text-transform:uppercase">
+          Email <span style="color:#4b5563;font-weight:400">(opcional)</span>
+        </label>
+        <input id="inp-email" type="email" placeholder="ej. yo@ejemplo.com" maxlength="120">
+      </div>
+
+      <button class="btn" id="btn-register" onclick="doRegister()">Crear cuenta</button>
+      <div id="err-general" style="color:#ffb4ab;font-size:12px;margin-top:10px;display:none;text-align:center"></div>
+    </div>
+
+    <!-- Resultado -->
+    <div id="result-section" style="display:none">
+      <div style="text-align:center;margin-bottom:20px">
+        <div style="font-size:32px;margin-bottom:8px">✓</div>
+        <h2 style="font-family:'Space Grotesk',sans-serif;font-size:18px;font-weight:600;color:#00e475">
+          ¡Cuenta creada!
+        </h2>
+        <p style="color:#6b7280;font-size:13px;margin-top:4px">
+          Guarda tu clave secreta — no se puede recuperar.
+        </p>
+      </div>
+
+      <div style="margin-bottom:20px">
+        <div style="font-size:11px;font-weight:500;color:#9ca3af;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">
+          Clave secreta
+        </div>
+        <div class="secret-box" id="result-secret"></div>
+        <button onclick="copySecret()" style="margin-top:8px;background:transparent;border:1px solid #45474b;
+          color:#9ca3af;border-radius:4px;padding:6px 14px;cursor:pointer;font-size:12px;
+          font-family:'Inter',sans-serif;transition:border-color .15s"
+          onmouseover="this.style.borderColor='#00e475'" onmouseout="this.style.borderColor='#45474b'">
+          Copiar
+        </button>
+      </div>
+
+      <a id="dash-link" href="#" class="btn" style="display:block;text-align:center;text-decoration:none">
+        Ir al dashboard →
+      </a>
+    </div>
+
+  </div>
+
+  <div style="text-align:center;margin-top:16px;font-size:12px;color:#4b5563">
+    Vigil &mdash; solo para uso personal
+  </div>
+</div>
+
+<script>
+const BASE = "__BASE__";
+
+async function doRegister() {
+  const name  = document.getElementById("inp-name").value.trim();
+  const email = document.getElementById("inp-email").value.trim();
+  const btn   = document.getElementById("btn-register");
+  const errN  = document.getElementById("err-name");
+  const errG  = document.getElementById("err-general");
+
+  errN.style.display = "none";
+  errG.style.display = "none";
+
+  if (name.length < 2) {
+    errN.textContent = "Mínimo 2 caracteres.";
+    errN.style.display = "block";
+    document.getElementById("inp-name").focus();
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = "Creando…";
+
+  try {
+    const params = new URLSearchParams({ name });
+    if (email) params.set("email", email);
+    const res = await fetch(`${BASE}/api/register?${params}`, { method: "POST" });
+    const data = await res.json();
+
+    if (!res.ok) {
+      throw new Error(data.detail || "Error al registrar");
+    }
+
+    document.getElementById("result-secret").textContent = data.secret;
+    document.getElementById("dash-link").href = data.dashboard;
+    document.getElementById("form-section").style.display = "none";
+    document.getElementById("result-section").style.display = "block";
+
+  } catch(e) {
+    errG.textContent = e.message;
+    errG.style.display = "block";
+    btn.disabled = false;
+    btn.textContent = "Crear cuenta";
+  }
+}
+
+function copySecret() {
+  const txt = document.getElementById("result-secret").textContent;
+  navigator.clipboard.writeText(txt).then(() => {
+    const btn = event.target;
+    btn.textContent = "¡Copiado!";
+    btn.style.borderColor = "#00e475";
+    btn.style.color = "#00e475";
+    setTimeout(() => {
+      btn.textContent = "Copiar";
+      btn.style.borderColor = "#45474b";
+      btn.style.color = "#9ca3af";
+    }, 1800);
+  });
+}
+
+document.getElementById("inp-name").addEventListener("keydown", e => {
+  if (e.key === "Enter") doRegister();
+});
+</script>
+</body>
+</html>
+"""
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
