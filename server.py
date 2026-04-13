@@ -151,8 +151,9 @@ def recategorize_db():
 # ── Helpers ──────────────────────────────────────────────────────────────────
 def categorize(event_id: int, provider: str, message: str = "") -> str:
     """Clasifica un evento por categoría usando ID, proveedor y contenido del mensaje.
-    Prioridad: BSOD > DISCO > GPU > RED > DRIVER > ENERGIA > ACTUALIZACION >
-               SEGURIDAD > ANTIVIRUS > KERNEL > BROWSER > SERVICIO > APP_CRASH > SISTEMA
+    Prioridad: BSOD > GPU(prov) > DISCO > GPU(id) > RED > DRIVER > ENERGIA > ACTUALIZACION >
+               SEGURIDAD > ANTIVIRUS > KERNEL > SERVICIO > BROWSER > APP_CRASH > SISTEMA
+    Nota: proveedor GPU tiene prioridad sobre IDs de disco para casos como nvlddmkm ID 153.
     """
     p = provider.lower()
     m = message.lower()
@@ -161,12 +162,16 @@ def categorize(event_id: int, provider: str, message: str = "") -> str:
     if event_id in BSOD_IDS or "bugcheck" in m or "bug check" in m:
         return "BSOD"
 
-    # 2. DISCO — hardware de almacenamiento
+    # 2. GPU — proveedor GPU tiene prioridad sobre IDs de disco compartidos (ej: nvlddmkm ID 153)
+    if any(k in p for k in _GPU_PROV):
+        return "GPU"
+
+    # 3. DISCO — hardware de almacenamiento
     if event_id in DISK_IDS or any(k in p for k in _DISK_PROV):
         return "DISCO"
 
-    # 3. GPU — tarjeta gráfica y display drivers
-    if event_id in GPU_IDS or any(k in p for k in _GPU_PROV):
+    # 4. GPU — por ID (sin proveedor GPU explícito)
+    if event_id in GPU_IDS:
         return "GPU"
 
     # 4. RED — conectividad y protocolos de red
