@@ -14,6 +14,7 @@ API_SECRET       = os.environ.get("API_SECRET", "changeme")
 CLAUDE_API_KEY   = os.environ.get("CLAUDE_API_KEY", "")
 DB_PATH          = os.environ.get("DB_PATH", "/home/corillo-adm/win-monitor/monitor.db")
 BASE_PATH        = "/win-monitor"
+DEMO_SECRET      = "vigil-demo"
 TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -686,6 +687,12 @@ def make_secret() -> str:
 
 def get_user(secret: str) -> dict:
     """Retorna el usuario dado su secret, o lanza 401."""
+    # Demo: alias de solo lectura que apunta al usuario admin (API_SECRET)
+    if secret == DEMO_SECRET:
+        secret = API_SECRET
+        is_demo = True
+    else:
+        is_demo = False
     conn = get_db()
     row  = conn.execute(
         "SELECT id, name, email, telegram_token, telegram_chat_id FROM users WHERE secret=? AND active=1", (secret,)
@@ -697,6 +704,7 @@ def get_user(secret: str) -> dict:
         "id": row["id"], "name": row["name"], "email": row["email"],
         "telegram_token": row["telegram_token"] or "",
         "telegram_chat_id": row["telegram_chat_id"] or "",
+        "is_demo": is_demo,
     }
 
 def auth(secret: str):
@@ -1512,6 +1520,8 @@ def save_settings(secret: str = Query(...),
                   telegram_token: str = Query(default=""),
                   telegram_chat_id: str = Query(default=""),
                   bg: BackgroundTasks = None):
+    if secret == DEMO_SECRET:
+        raise HTTPException(403, "Modo demo — solo lectura")
     user = get_user(secret)
     token   = telegram_token.strip()
     chat_id = telegram_chat_id.strip()
@@ -1538,6 +1548,8 @@ def save_settings(secret: str = Query(...),
 
 @app.post("/api/settings/test-telegram")
 def test_telegram(secret: str = Query(...)):
+    if secret == DEMO_SECRET:
+        raise HTTPException(403, "Modo demo — solo lectura")
     user = get_user(secret)
     conn = get_db()
     row  = conn.execute(
@@ -2108,6 +2120,10 @@ tailwind.config = {
          class="bg-brand text-[#003918] font-bold text-lg px-10 py-4 rounded-xl hover:brightness-110 transition-all shadow-lg shadow-brand/20">
         Crear cuenta gratis
       </a>
+      <a href="__BASE__/?secret=vigil-demo" target="_blank"
+         class="flex items-center gap-2 justify-center bg-white/5 border border-white/10 text-white font-medium text-lg px-10 py-4 rounded-xl hover:bg-white/10 transition-all">
+        <span style="font-size:16px">▶</span> Ver demo en vivo
+      </a>
       <a href="__DOWNLOAD__" download
          class="flex items-center gap-2 justify-center bg-white/5 border border-white/10 text-white font-medium text-lg px-10 py-4 rounded-xl hover:bg-white/10 transition-all">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2313,7 +2329,8 @@ tailwind.config = {
 def dashboard(secret: str = Query(default="")):
     if not secret:
         return LOGIN_HTML.replace("__BASE__", BASE_PATH)
-    auth(secret)
+    if secret != DEMO_SECRET:
+        auth(secret)
     return HTML.replace("__SECRET__", secret).replace("__BASE__", BASE_PATH)
 
 LOGIN_HTML = r"""<!DOCTYPE html>
@@ -2546,6 +2563,15 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
 </head>
 <body class="min-h-screen flex overflow-hidden bg-surface text-on-surface">
 
+<!-- Demo banner -->
+<div id="demo-banner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;
+  background:linear-gradient(90deg,#fabd00,#f59e0b);color:#1a1000;
+  text-align:center;padding:8px 16px;font-size:12px;font-weight:700;
+  font-family:'Space Grotesk',sans-serif;letter-spacing:.05em">
+  MODO DEMO — datos en vivo, solo lectura &nbsp;·&nbsp;
+  <a href="/vigil/register" style="text-decoration:underline;color:#1a1000">Crear tu cuenta gratis →</a>
+</div>
+
 <!-- Dot-grid texture -->
 <div class="fixed inset-0 pointer-events-none opacity-[0.025] z-[-1] dot-texture"></div>
 
@@ -2598,13 +2624,14 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
        onmouseout="this.style.background='';this.style.color='rgba(198,198,203,.6)'">
       <span class="material-symbols-outlined text-[18px]">lightbulb</span>Recomendaciones
     </a>
-    <a class="flex items-center gap-3 p-2.5 rounded-xl font-headline uppercase text-xs tracking-widest transition-all cursor-pointer"
+    <a id="nav-config" class="flex items-center gap-3 p-2.5 rounded-xl font-headline uppercase text-xs tracking-widest transition-all cursor-pointer"
        style="color:rgba(198,198,203,.6)" href="#sec-settings"
        onmouseover="this.style.background='rgba(32,31,31,1)';this.style.color='#e5e2e1'"
        onmouseout="this.style.background='';this.style.color='rgba(198,198,203,.6)'">
       <span class="material-symbols-outlined text-[18px]">settings</span>Configuración
     </a>
   </nav>
+
 
   <!-- Stats -->
   <div class="mt-auto pt-4" style="border-top:1px solid rgba(69,71,75,.2)">
@@ -3001,6 +3028,13 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
 
 <script>
 const S = "__SECRET__", B = "__BASE__";
+const IS_DEMO = S === "vigil-demo";
+if (IS_DEMO) {
+  document.getElementById("demo-banner").style.display = "block";
+  document.body.style.paddingTop = "36px";
+  const cfg = document.getElementById("nav-config");
+  if (cfg) cfg.style.display = "none";
+}
 let arTimer = null, arOn = false;
 let expanded = new Set();
 let cpuHistory = [];
