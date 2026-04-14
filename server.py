@@ -3031,7 +3031,11 @@ const S = "__SECRET__", B = "__BASE__";
 const IS_DEMO = S === "vigil-demo";
 if (IS_DEMO) {
   document.getElementById("demo-banner").style.display = "block";
-  document.body.style.paddingTop = "36px";
+  // Empuja el sidebar y el main hacia abajo para no tapar contenido
+  const aside = document.querySelector("aside");
+  if (aside) aside.style.top = "36px";
+  const main = document.querySelector("main");
+  if (main) main.style.paddingTop = "36px";
   const cfg = document.getElementById("nav-config");
   if (cfg) cfg.style.display = "none";
 }
