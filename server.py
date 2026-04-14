@@ -1900,8 +1900,8 @@ document.getElementById("inp-name").focus();
 </html>
 """
 
-CLIENT_VERSION = "1.2.1"
-CLIENT_DOWNLOAD_URL = "https://github.com/marcosstgo/vigil/releases/download/v1.2.1/Vigil.exe"
+CLIENT_VERSION = "1.2.2"
+CLIENT_DOWNLOAD_URL = "https://github.com/marcosstgo/vigil/releases/download/v1.2.2/Vigil.exe"
 
 @app.get("/api/version")
 def get_version():

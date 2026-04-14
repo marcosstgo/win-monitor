@@ -72,11 +72,24 @@ foreach ($t in $targets) {
 
 # Metricas del sistema
 $os      = Get-CimInstance -ClassName CIM_OperatingSystem -ErrorAction SilentlyContinue
-$cpu     = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
 $memTotal = [math]::Round($os.TotalVisibleMemorySize / 1024)
 $memFree  = [math]::Round($os.FreePhysicalMemory / 1024)
 $memPct   = [math]::Round((($memTotal - $memFree) / $memTotal) * 100, 1)
 $uptime   = [math]::Round(((Get-Date) - $os.LastBootUpTime).TotalMinutes)
+
+# CPU % via performance counter (mas confiable que Win32_Processor.LoadPercentage)
+$cpuPct = $null
+try {
+    $perf = Get-CimInstance -ClassName Win32_PerfFormattedData_PerfOS_Processor -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -eq '_Total' } | Select-Object -First 1
+    if ($perf) { $cpuPct = [int]$perf.PercentProcessorTime }
+} catch {}
+if ($null -eq $cpuPct) {
+    try {
+        $cpu = Get-CimInstance -ClassName Win32_Processor -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($cpu) { $cpuPct = [int]$cpu.LoadPercentage }
+    } catch {}
+}
 
 $diskList = @()
 Get-Volume -ErrorAction SilentlyContinue |
@@ -115,11 +128,23 @@ try {
 } catch {}
 
 $cpuTemp = $null
+# Metodo 1: MSAcpi_ThermalZoneTemperature — toma la zona mas caliente en rango razonable
 try {
-    $tz = Get-CimInstance -Namespace "root/WMI" -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue |
-          Select-Object -First 1
-    if ($tz) { $cpuTemp = [math]::Round($tz.CurrentTemperature / 10.0 - 273.15) }
+    $zones = Get-CimInstance -Namespace "root/WMI" -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction SilentlyContinue
+    if ($zones) {
+        $temps = $zones | ForEach-Object { [math]::Round($_.CurrentTemperature / 10.0 - 273.15) } |
+                 Where-Object { $_ -gt 20 -and $_ -lt 120 }
+        if ($temps) { $cpuTemp = ($temps | Measure-Object -Maximum).Maximum }
+    }
 } catch {}
+# Metodo 2: ThermalZoneInformation performance counters
+if ($null -eq $cpuTemp) {
+    try {
+        $tz2 = Get-CimInstance -ClassName Win32_PerfFormattedData_Counters_ThermalZoneInformation -ErrorAction SilentlyContinue |
+               Select-Object -First 1
+        if ($tz2 -and $tz2.Temperature -gt 273) { $cpuTemp = [int]$tz2.Temperature - 273 }
+    } catch {}
+}
 
 # Disk I/O via WMI performance counters (instantaneo, sin espera)
 $diskReadMBps  = $null
@@ -163,7 +188,7 @@ $metrics = [PSCustomObject]@{
     mem_total_mb      = $memTotal
     mem_free_mb       = $memFree
     mem_percent       = $memPct
-    cpu_percent       = $cpu.LoadPercentage
+    cpu_percent       = $cpuPct
     uptime_minutes    = $uptime
     gpu_name          = $gpuName
     gpu_temp          = $gpuTemp

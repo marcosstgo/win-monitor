@@ -74,7 +74,7 @@ def acquire_single_instance() -> bool:
     return True
 
 # ── Constantes ────────────────────────────────────────────────────────────────
-VERSION      = "1.2.1"
+VERSION      = "1.2.2"
 APP_NAME     = "Vigil"
 CONFIG_DIR   = Path(os.environ["APPDATA"]) / "Vigil"
 CONFIG_FILE  = CONFIG_DIR / "config.json"
