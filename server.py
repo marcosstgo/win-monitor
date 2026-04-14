@@ -276,7 +276,7 @@ def run_incident_analysis(inc_id: int, bsod: dict, chain: list):
         for i, e in enumerate(chain)
     ) or "  (sin eventos previos en la ventana de 15 min)"
 
-    prompt = f"""Eres un experto en diagnóstico de Windows. Analiza este incidente del MSI Trident X2 (gaming desktop, Windows 11).
+    prompt = f"""Eres un experto en diagnóstico de Windows. Analiza este incidente de Windows 11.
 
 EVENTO FINAL — BSOD:
   Tiempo   : {bsod['time_created']}
@@ -405,7 +405,7 @@ def analyze_service_crash(service_name: str, category: str, crash_count: int, cr
         for e in detail_events[:8]
     ) or "  (sin logs de detalle disponibles)"
 
-    prompt = f"""Eres un experto en diagnóstico de Windows. El servicio "{service_name}" (categoría: {category}) ha crasheado {crash_count} veces en las últimas horas en un MSI Trident X2 (Windows 11 25H2, RTX 4090).
+    prompt = f"""Eres un experto en diagnóstico de Windows. El servicio "{service_name}" (categoría: {category}) ha crasheado {crash_count} veces en las últimas horas en Windows 11.
 
 EVENTOS DE CRASH (Service Control Manager):
 {crashes_text}
@@ -484,7 +484,7 @@ def auto_analyze(event_id_db: int):
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
-            messages=[{"role": "user", "content": f"""Eres un experto en diagnóstico de Windows. Analiza este evento del sistema MSI Trident X2 (gaming desktop, Windows 11).
+            messages=[{"role": "user", "content": f"""Eres un experto en diagnóstico de Windows. Analiza este evento del sistema Windows 11.
 
 Evento principal:
 - Tiempo: {event['time_created']}
@@ -2108,7 +2108,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vigil — MSI Trident X2</title>
+<title>Vigil — Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -2223,7 +2223,7 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
   <!-- Logo -->
   <div class="mb-6">
     <h1 class="text-base font-black text-primary tracking-tighter font-headline leading-none">VIGIL</h1>
-    <p class="text-[9px] font-headline uppercase tracking-widest text-on-surface-variant mt-1" style="opacity:.4">MSI TRIDENT X2 · marc0</p>
+    <p class="text-[9px] font-headline uppercase tracking-widest text-on-surface-variant mt-1" style="opacity:.4" id="sidebar-machine">—</p>
   </div>
 
   <!-- Live status pill -->
@@ -2416,7 +2416,7 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
         <div class="bg-surface-container-low rounded-xl p-7 relative overflow-hidden">
           <div class="flex justify-between items-start mb-7">
             <div>
-              <p class="text-[10px] font-headline font-black uppercase tracking-widest text-on-surface-variant" style="opacity:.5">GPU Load · RTX 4090</p>
+              <p class="text-[10px] font-headline font-black uppercase tracking-widest text-on-surface-variant" style="opacity:.5" id="gpu-label">GPU Load</p>
               <h4 class="text-4xl font-headline font-light text-on-surface mt-1.5">
                 <span id="gpu-val-big">—</span><span class="text-lg ml-1 opacity-50">%</span>
               </h4>
@@ -2646,6 +2646,16 @@ function fmtTime(t) {
 /* ── Health ──────────────────────────────────────────────────────── */
 function renderHealth(s) {
   if (!s) return;
+
+  /* Machine label en sidebar */
+  const host = s.hostname || "—";
+  const user = s.username || "";
+  document.getElementById("sidebar-machine").textContent = (host + (user ? " · " + user : "")).toUpperCase();
+  document.title = "Vigil — " + host;
+
+  /* GPU label dinámico */
+  const gpuLabel = document.getElementById("gpu-label");
+  if (gpuLabel) gpuLabel.textContent = s.gpu_vram_total_mb ? `GPU Load · ${s.gpu_vram_total_mb >= 16000 ? "RTX" : "GPU"} ${Math.round(s.gpu_vram_total_mb/1024)}GB` : "GPU Load";
 
   /* CPU sparkline */
   const cpu = s.cpu_percent ?? 0;
