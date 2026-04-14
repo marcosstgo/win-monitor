@@ -2560,6 +2560,14 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
 @keyframes pulse2{0%,100%{opacity:1}50%{opacity:.3}}
 .live-pulse{animation:pulse2 2s infinite}
 
+/* ── Demo banner offset ── */
+body.demo-mode aside         { top: 36px; }
+body.demo-mode #mob-header   { top: 36px; }
+body.demo-mode #main-content { padding-top: 36px; }
+@media (max-width: 767px) {
+  body.demo-mode #main-content { padding-top: 88px; }
+}
+
 /* ── Mobile ── */
 @media (max-width: 767px) {
   aside { transform: translateX(-100%); transition: transform .25s ease; }
@@ -3069,25 +3077,16 @@ const IS_DEMO = S === "vigil-demo";
 
 /* ── Mobile sidebar ── */
 function toggleSidebar() {
-  const aside = document.querySelector("aside");
-  const overlay = document.getElementById("mob-overlay");
-  aside.classList.toggle("open");
-  overlay.classList.toggle("hidden");
+  document.querySelector("aside").classList.toggle("open");
+  document.getElementById("mob-overlay").classList.toggle("hidden");
 }
-// En mobile, empuja el main bajo el header (+ banner demo si aplica)
 if (window.innerWidth < 768) {
   const m = document.getElementById("main-content");
-  if (m) m.style.paddingTop = (IS_DEMO ? 88 : 52) + "px";
+  if (m) m.style.paddingTop = "52px";
 }
 if (IS_DEMO) {
   document.getElementById("demo-banner").style.display = "block";
-  const aside = document.querySelector("aside");
-  if (aside) aside.style.top = "36px";
-  const main = document.querySelector("main");
-  if (main) main.style.paddingTop = "36px";
-  // En mobile, el header también baja
-  const mobHeader = document.getElementById("mob-header");
-  if (mobHeader) mobHeader.style.top = "36px";
+  document.body.classList.add("demo-mode");
   const cfg = document.getElementById("nav-config");
   if (cfg) cfg.style.display = "none";
 }
