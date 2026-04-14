@@ -150,6 +150,10 @@ def migrate_db():
     if "user_id" not in ev_cols:
         conn.execute("ALTER TABLE events ADD COLUMN user_id INTEGER")
 
+    # gpu_name en snapshots
+    if "gpu_name" not in snap_cols:
+        conn.execute("ALTER TABLE snapshots ADD COLUMN gpu_name TEXT")
+
     # Telegram por usuario
     usr_cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if "telegram_token" not in usr_cols:
@@ -527,6 +531,7 @@ class Metrics(BaseModel):
     mem_percent: Optional[float] = None
     cpu_percent: Optional[float] = None
     uptime_minutes: Optional[int] = None
+    gpu_name: Optional[str] = None
     gpu_temp: Optional[int] = None
     gpu_percent: Optional[int] = None
     gpu_vram_used_mb: Optional[int] = None
@@ -685,14 +690,15 @@ def receive_events(batch: EventBatch, bg: BackgroundTasks):
         m = batch.metrics
         conn.execute("""
             INSERT INTO snapshots (received_at,hostname,username,mem_total_mb,mem_free_mb,
-                mem_percent,cpu_percent,uptime_minutes,gpu_temp,gpu_percent,gpu_vram_used_mb,
+                mem_percent,cpu_percent,uptime_minutes,gpu_name,gpu_temp,gpu_percent,gpu_vram_used_mb,
                 gpu_vram_total_mb,cpu_temp,disk_read_mbps,disk_write_mbps,smart_disks,
                 browser_crashes,disks,user_id)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (now, m.hostname, m.username, m.mem_total_mb, m.mem_free_mb,
-              m.mem_percent, m.cpu_percent, m.uptime_minutes, m.gpu_temp, m.gpu_percent,
-              m.gpu_vram_used_mb, m.gpu_vram_total_mb, m.cpu_temp, m.disk_read_mbps,
-              m.disk_write_mbps, m.smart_disks, m.browser_crashes, m.disks, uid))
+              m.mem_percent, m.cpu_percent, m.uptime_minutes, getattr(m,'gpu_name',None),
+              m.gpu_temp, m.gpu_percent, m.gpu_vram_used_mb, m.gpu_vram_total_mb,
+              m.cpu_temp, m.disk_read_mbps, m.disk_write_mbps, m.smart_disks,
+              m.browser_crashes, m.disks, uid))
 
     for e in batch.events:
         cat = categorize(e.event_id, e.provider, e.message)
@@ -2655,7 +2661,7 @@ function renderHealth(s) {
 
   /* GPU label dinámico */
   const gpuLabel = document.getElementById("gpu-label");
-  if (gpuLabel) gpuLabel.textContent = s.gpu_vram_total_mb ? `GPU Load · ${s.gpu_vram_total_mb >= 16000 ? "RTX" : "GPU"} ${Math.round(s.gpu_vram_total_mb/1024)}GB` : "GPU Load";
+  if (gpuLabel) gpuLabel.textContent = s.gpu_name ? `GPU Load · ${s.gpu_name}` : "GPU Load";
 
   /* CPU sparkline */
   const cpu = s.cpu_percent ?? 0;

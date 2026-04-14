@@ -90,6 +90,17 @@ $gpuTemp      = $null
 $gpuPercent   = $null
 $gpuVramUsed  = $null
 $gpuVramTotal = $null
+$gpuName      = $null
+
+# Nombre de GPU via Win32_VideoController (funciona con AMD, NVIDIA, Intel)
+try {
+    $vc = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue |
+          Where-Object { $_.Name -notmatch 'Microsoft|Remote|Virtual|Basic' } |
+          Select-Object -First 1
+    if ($vc) { $gpuName = $vc.Name.Trim() }
+} catch {}
+
+# NVIDIA: temperatura, utilización y VRAM via nvidia-smi
 try {
     $nvsmi = & "nvidia-smi" --query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits 2>$null
     if ($nvsmi) {
@@ -154,6 +165,7 @@ $metrics = [PSCustomObject]@{
     mem_percent       = $memPct
     cpu_percent       = $cpu.LoadPercentage
     uptime_minutes    = $uptime
+    gpu_name          = $gpuName
     gpu_temp          = $gpuTemp
     gpu_percent       = $gpuPercent
     gpu_vram_used_mb  = $gpuVramUsed
