@@ -1,0 +1,70 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install pyinstaller pystray pillow requests
+
+      - name: Build Vigil.exe
+        run: |
+          pyinstaller --noconfirm --onefile --windowed `
+            --icon=vigil.ico `
+            --name=Vigil `
+            --hidden-import=pystray._win32 `
+            --hidden-import=PIL._tkinter_finder `
+            vigil_tray.py
+
+      - name: Sign with SignPath
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug: vigil
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: exe
+          github-artifact-id: unsigned-exe
+          wait-for-completion: true
+          output-artifact-directory: dist-signed
+        continue-on-error: true  # Si no hay SignPath configurado, sigue sin firmar
+
+      - name: Use signed exe if available, else unsigned
+        shell: pwsh
+        run: |
+          if (Test-Path "dist-signed/Vigil.exe") {
+            Copy-Item "dist-signed/Vigil.exe" "dist/Vigil.exe" -Force
+            Write-Host "Using signed exe"
+          } else {
+            Write-Host "Using unsigned exe"
+          }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Vigil.exe
+          generate_release_notes: false
+          body: |
+            ## Vigil ${{ github.ref_name }}
+
+            **Instalación:** Descarga `Vigil.exe` y ejecútalo. Se instala en el system tray automáticamente.
+
+            **Auto-update:** Si ya tienes Vigil instalado, se actualizará solo.
