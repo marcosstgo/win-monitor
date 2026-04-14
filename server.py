@@ -1919,6 +1919,74 @@ def get_version():
 def landing():
     return LANDING_HTML.replace("__BASE__", BASE_PATH).replace("__REGISTER__", "/vigil/register").replace("__DOWNLOAD__", CLIENT_DOWNLOAD_URL).replace("__VERSION__", CLIENT_VERSION)
 
+@app.get("/vigil/privacy", response_class=HTMLResponse)
+def privacy():
+    return PRIVACY_HTML
+
+PRIVACY_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vigil — Privacy Policy</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0e0e0e; color: #e5e2e1; font-family: "Space Grotesk", sans-serif; padding: 60px 24px; }
+.wrap { max-width: 720px; margin: 0 auto; }
+.logo { font-size: 20px; font-weight: 700; color: #00e475; margin-bottom: 48px; }
+h1 { font-size: 28px; font-weight: 700; margin-bottom: 8px; }
+.date { font-size: 13px; color: #6b7280; margin-bottom: 40px; }
+h2 { font-size: 16px; font-weight: 600; color: #00e475; margin: 32px 0 12px; }
+p, li { font-size: 14px; color: #9ca3af; line-height: 1.8; }
+ul { padding-left: 20px; }
+li { margin-bottom: 6px; }
+a { color: #00e475; text-decoration: none; }
+.footer { margin-top: 60px; padding-top: 24px; border-top: 1px solid #1f1f1f; font-size: 12px; color: #374151; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo">VIGIL</div>
+  <h1>Privacy Policy</h1>
+  <p class="date">Last updated: April 2026</p>
+
+  <p>Vigil is an open source Windows system monitoring tool. This policy explains what data is collected and how it is used.</p>
+
+  <h2>What data is collected</h2>
+  <p>When you install and run the Vigil client, the following information is sent to your personal dashboard server:</p>
+  <ul>
+    <li>Windows Event Log entries (system errors, warnings, application crashes)</li>
+    <li>Hardware metrics: CPU usage, RAM usage, GPU usage, disk usage, temperatures</li>
+    <li>System information: hostname, uptime, disk health (S.M.A.R.T.)</li>
+    <li>Browser crash report file counts (no content, only count)</li>
+  </ul>
+
+  <h2>How data is stored</h2>
+  <ul>
+    <li>All data is stored in a SQLite database on your own server or the server you configured</li>
+    <li>Data is isolated per user account using a unique secret key</li>
+    <li>Event data older than 30 days and snapshots older than 14 days are automatically deleted</li>
+    <li>No data is shared with third parties</li>
+  </ul>
+
+  <h2>Telegram notifications</h2>
+  <p>If you configure Telegram alerts, your Telegram Bot Token and Chat ID are stored in the database. These are used solely to send you system alerts. They are never shared or used for any other purpose.</p>
+
+  <h2>No tracking</h2>
+  <p>Vigil does not use analytics, advertising, or any form of user tracking. There are no cookies, no fingerprinting, and no third-party scripts on the dashboard.</p>
+
+  <h2>Open source</h2>
+  <p>Vigil is fully open source. You can review all code at <a href="https://github.com/marcosstgo/vigil">github.com/marcosstgo/vigil</a>.</p>
+
+  <h2>Contact</h2>
+  <p>Questions? Open an issue on <a href="https://github.com/marcosstgo/vigil">GitHub</a>.</p>
+
+  <div class="footer">Vigil — open source Windows system monitor</div>
+</div>
+</body>
+</html>"""
+
 LANDING_HTML = r"""<!DOCTYPE html>
 <html lang="es">
 <head>
