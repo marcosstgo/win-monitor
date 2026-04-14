@@ -1921,7 +1921,8 @@ def landing():
 
 @app.get("/vigil/screenshot.jpg")
 def screenshot():
-    path = Path(__file__).parent / "screenshot.jpg"
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "screenshot.jpg")
     return FileResponse(path, media_type="image/jpeg")
 
 @app.get("/vigil/privacy", response_class=HTMLResponse)
@@ -2031,6 +2032,23 @@ tailwind.config = {
     width: 2.5rem;
     height: 2.5rem;
   }
+  .hero { position: relative; overflow: hidden; }
+  .hero::before {
+    content: '';
+    position: absolute;
+    top: -4%; left: -4%; right: -4%; bottom: -4%;
+    background: url('/vigil/screenshot.jpg') center top / cover no-repeat;
+    filter: blur(16px) brightness(0.28) saturate(0.5);
+    z-index: 0;
+  }
+  .hero::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(to bottom, rgba(14,14,14,0.15) 0%, rgba(14,14,14,0.72) 65%, #0e0e0e 100%);
+    z-index: 1;
+  }
+  .hero-content { position: relative; z-index: 2; }
 </style>
 </head>
 <body class="bg-dark text-white min-h-screen">
@@ -2065,57 +2083,40 @@ tailwind.config = {
 </nav>
 
 <!-- HERO -->
-<section class="pt-40 pb-28 px-6 text-center relative overflow-hidden">
-  <!-- Screenshot background -->
-  <div class="absolute inset-0 pointer-events-none" style="
-    background-image: url('/vigil/screenshot.jpg');
-    background-size: cover;
-    background-position: center top;
-    filter: blur(12px) brightness(0.18) saturate(0.6);
-    transform: scale(1.05);
-  "></div>
-  <!-- Gradient overlay para fundir con el fondo -->
-  <div class="absolute inset-0 pointer-events-none" style="
-    background: linear-gradient(to bottom, transparent 40%, #0e0e0e 100%);
-  "></div>
-  <!-- Background glow -->
-  <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-    <div class="w-[600px] h-[600px] rounded-full bg-brand/5 blur-3xl"></div>
-  </div>
-
-  <!-- Eye SVG large -->
-  <div class="relative flex justify-center mb-8">
-    <div class="glow rounded-full p-1">
-      <svg width="88" height="88" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <circle cx="32" cy="32" r="28" fill="#131313" stroke="#00e475" stroke-width="2.5"/>
-        <ellipse cx="32" cy="32" rx="17" ry="8.5" fill="#00e47510" stroke="#00e475" stroke-width="2"/>
-        <circle cx="32" cy="32" r="7" fill="#00e475"/>
-        <circle cx="29" cy="29" r="2.5" fill="white" opacity=".75"/>
-      </svg>
+<section class="hero pt-40 pb-28 px-6 text-center">
+  <div class="hero-content">
+    <div class="flex justify-center mb-8">
+      <div class="glow rounded-full p-1">
+        <svg width="88" height="88" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="32" cy="32" r="28" fill="#131313" stroke="#00e475" stroke-width="2.5"/>
+          <ellipse cx="32" cy="32" rx="17" ry="8.5" fill="#00e47510" stroke="#00e475" stroke-width="2"/>
+          <circle cx="32" cy="32" r="7" fill="#00e475"/>
+          <circle cx="29" cy="29" r="2.5" fill="white" opacity=".75"/>
+        </svg>
+      </div>
     </div>
-  </div>
-
-  <h1 class="text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-none">
-    Tu PC,<br>
-    <span class="text-brand">siempre bajo control.</span>
-  </h1>
-  <p class="text-lg md:text-xl text-white/50 max-w-xl mx-auto mb-10 leading-relaxed">
-    Vigil monitorea eventos, hardware y crashes de tu PC con Windows en tiempo real —
-    con diagnóstico por IA y alertas en Telegram.
-  </p>
-  <div class="flex flex-col sm:flex-row gap-4 justify-center">
-    <a href="__REGISTER__"
-       class="bg-brand text-[#003918] font-bold text-lg px-10 py-4 rounded-xl hover:brightness-110 transition-all shadow-lg shadow-brand/20">
-      Crear cuenta gratis
-    </a>
-    <a href="__DOWNLOAD__" download
-       class="flex items-center gap-2 justify-center bg-white/5 border border-white/10 text-white font-medium text-lg px-10 py-4 rounded-xl hover:bg-white/10 transition-all">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
-      </svg>
-      Descargar Vigil.exe
-      <span class="text-white/30 text-sm font-normal">v__VERSION__</span>
-    </a>
+    <h1 class="text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-none">
+      Tu PC,<br>
+      <span class="text-brand">siempre bajo control.</span>
+    </h1>
+    <p class="text-lg md:text-xl text-white/50 max-w-xl mx-auto mb-10 leading-relaxed">
+      Vigil monitorea eventos, hardware y crashes de tu PC con Windows en tiempo real —
+      con diagnóstico por IA y alertas en Telegram.
+    </p>
+    <div class="flex flex-col sm:flex-row gap-4 justify-center">
+      <a href="__REGISTER__"
+         class="bg-brand text-[#003918] font-bold text-lg px-10 py-4 rounded-xl hover:brightness-110 transition-all shadow-lg shadow-brand/20">
+        Crear cuenta gratis
+      </a>
+      <a href="__DOWNLOAD__" download
+         class="flex items-center gap-2 justify-center bg-white/5 border border-white/10 text-white font-medium text-lg px-10 py-4 rounded-xl hover:bg-white/10 transition-all">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Descargar Vigil.exe
+        <span class="text-white/30 text-sm font-normal">v__VERSION__</span>
+      </a>
+    </div>
   </div>
 </section>
 
