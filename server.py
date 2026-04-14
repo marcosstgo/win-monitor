@@ -3074,18 +3074,20 @@ function toggleSidebar() {
   aside.classList.toggle("open");
   overlay.classList.toggle("hidden");
 }
-// En mobile, empuja el main bajo el header
+// En mobile, empuja el main bajo el header (+ banner demo si aplica)
 if (window.innerWidth < 768) {
   const m = document.getElementById("main-content");
-  if (m) m.style.paddingTop = "52px";
+  if (m) m.style.paddingTop = (IS_DEMO ? 88 : 52) + "px";
 }
 if (IS_DEMO) {
   document.getElementById("demo-banner").style.display = "block";
-  // Empuja el sidebar y el main hacia abajo para no tapar contenido
   const aside = document.querySelector("aside");
   if (aside) aside.style.top = "36px";
   const main = document.querySelector("main");
   if (main) main.style.paddingTop = "36px";
+  // En mobile, el header también baja
+  const mobHeader = document.getElementById("mob-header");
+  if (mobHeader) mobHeader.style.top = "36px";
   const cfg = document.getElementById("nav-config");
   if (cfg) cfg.style.display = "none";
 }
