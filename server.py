@@ -796,6 +796,170 @@ def stats(secret: str = Query(...), hostname: str = Query(default="")):
     conn.close()
     return s
 
+@app.get("/api/recommendations")
+def get_recommendations(secret: str = Query(...), hostname: str = Query(default="")):
+    """Recomendaciones automáticas basadas en el estado real de la máquina."""
+    user = get_user(secret)
+    uid  = user["id"]
+    conn = get_db()
+    recs = []
+
+    hf = " AND hostname=?" if hostname else ""
+    hp = [hostname] if hostname else []
+
+    # ── Snapshot más reciente
+    snap = conn.execute(
+        f"SELECT * FROM snapshots WHERE user_id=?{hf} ORDER BY id DESC LIMIT 1", [uid]+hp
+    ).fetchone()
+
+    # Agente desconectado
+    if snap:
+        last_dt = datetime.fromisoformat(snap["received_at"].replace("Z","+00:00"))
+        diff_m  = (datetime.now(timezone.utc) - last_dt).total_seconds() / 60
+        if diff_m > 120:
+            h = int(diff_m // 60); m = int(diff_m % 60)
+            recs.append({"level":"warning","title":"Cliente desconectado",
+                "desc":f"Sin reportes desde hace {h}h {m}m.",
+                "action":"Verifica que Vigil.exe esté corriendo en la PC."})
+    else:
+        conn.close()
+        return {"recommendations":[{"level":"info","title":"Sin datos aún",
+            "desc":"No se han recibido snapshots.","action":"Instala y ejecuta el cliente Vigil."}]}
+
+    # ── Disco lleno
+    if snap["disks"]:
+        for d in snap["disks"].split(";"):
+            d = d.strip()
+            if not d: continue
+            p = d.split("|")
+            if len(p) >= 3:
+                try:
+                    pct = float(p[2].rstrip("%"))
+                    letter = p[0]
+                    if pct > 90:
+                        recs.append({"level":"urgent","title":f"Disco {letter} casi lleno",
+                            "desc":f"{pct}% usado.",
+                            "action":f"Libera espacio en {letter} — usa el Liberador de espacio en disco o desinstala programas."})
+                    elif pct > 82:
+                        recs.append({"level":"warning","title":f"Poco espacio en disco {letter}",
+                            "desc":f"{pct}% usado.",
+                            "action":f"Considera limpiar archivos temporales en {letter}."})
+                except: pass
+
+    # ── RAM elevada
+    if snap["mem_percent"] and snap["mem_percent"] > 88:
+        recs.append({"level":"warning","title":"Uso de RAM elevado",
+            "desc":f"{snap['mem_percent']}% de RAM en uso.",
+            "action":"Cierra aplicaciones en segundo plano o considera agregar más RAM."})
+
+    # ── Temperatura CPU
+    if snap["cpu_temp"]:
+        if snap["cpu_temp"] > 85:
+            recs.append({"level":"urgent","title":"Temperatura del CPU elevada",
+                "desc":f"{snap['cpu_temp']}°C.",
+                "action":"Limpia el disipador, reaplica pasta térmica y verifica la ventilación."})
+        elif snap["cpu_temp"] > 75:
+            recs.append({"level":"warning","title":"Temperatura del CPU alta",
+                "desc":f"{snap['cpu_temp']}°C.",
+                "action":"Verifica el flujo de aire del gabinete."})
+
+    # ── Temperatura GPU
+    if snap["gpu_temp"]:
+        if snap["gpu_temp"] > 85:
+            recs.append({"level":"urgent","title":"Temperatura de GPU elevada",
+                "desc":f"{snap['gpu_temp']}°C.",
+                "action":"Limpia el cooler de la GPU y verifica el flujo de aire del gabinete."})
+        elif snap["gpu_temp"] > 80:
+            recs.append({"level":"warning","title":"Temperatura de GPU alta",
+                "desc":f"{snap['gpu_temp']}°C.",
+                "action":"Verifica que los fans de la GPU estén funcionando correctamente."})
+
+    # ── S.M.A.R.T. no saludable
+    if snap["smart_disks"]:
+        for d in snap["smart_disks"].split(";"):
+            d = d.strip()
+            if not d: continue
+            p = d.split("|")
+            if len(p) >= 3 and p[2].lower() not in ("healthy",""):
+                recs.append({"level":"urgent","title":f"Disco con problemas: {p[0]}",
+                    "desc":f"Estado S.M.A.R.T.: {p[2]}.",
+                    "action":"Haz un backup inmediato y considera reemplazar el disco."})
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # ── BSODs en 24h
+    bsods = conn.execute(
+        f"SELECT COUNT(*) FROM events WHERE user_id=? AND event_id IN (41,1001,6008) AND time_created LIKE ?{hf}",
+        [uid, f"{today}%"]+hp
+    ).fetchone()[0]
+    if bsods > 0:
+        recs.append({"level":"urgent",
+            "title":f"{'Un BSOD' if bsods==1 else f'{bsods} BSODs'} en las últimas 24h",
+            "desc":"Pantalla azul de la muerte detectada.",
+            "action":"Revisa C:\\Windows\\Minidump. Causas comunes: driver corrupto, RAM defectuosa o sobrecalentamiento."})
+
+    # ── Errores de disco en 24h
+    disk_errs = conn.execute(
+        f"SELECT COUNT(*) FROM events WHERE user_id=? AND event_id IN (7,11,51,157) AND level<=2 AND time_created > datetime('now','-24 hours'){hf}",
+        [uid]+hp
+    ).fetchone()[0]
+    if disk_errs >= 3:
+        recs.append({"level":"urgent","title":"Errores de disco frecuentes",
+            "desc":f"{disk_errs} errores en las últimas 24h.",
+            "action":"Ejecuta chkdsk /f en cmd como administrador y revisa el estado S.M.A.R.T."})
+    elif disk_errs > 0:
+        recs.append({"level":"warning","title":"Errores de disco detectados",
+            "desc":f"{disk_errs} error(es) en las últimas 24h.",
+            "action":"Monitorea el disco — si persiste, ejecuta chkdsk."})
+
+    # ── Errores de GPU en 24h
+    gpu_errs = conn.execute(
+        f"SELECT COUNT(*) FROM events WHERE user_id=? AND category='GPU' AND level<=2 AND time_created > datetime('now','-24 hours'){hf}",
+        [uid]+hp
+    ).fetchone()[0]
+    if gpu_errs >= 3:
+        recs.append({"level":"warning","title":"Driver de GPU inestable",
+            "desc":f"{gpu_errs} errores de GPU en 24h.",
+            "action":"Reinstala el driver con DDU (Display Driver Uninstaller) en Safe Mode."})
+
+    # ── Intentos de acceso fallidos
+    failed = conn.execute(
+        f"SELECT COUNT(*) FROM events WHERE user_id=? AND event_id=4625 AND time_created > datetime('now','-24 hours'){hf}",
+        [uid]+hp
+    ).fetchone()[0]
+    if failed > 10:
+        recs.append({"level":"warning","title":"Múltiples accesos fallidos",
+            "desc":f"{failed} intentos fallidos en 24h.",
+            "action":"Verifica si hay accesos no autorizados y considera cambiar la contraseña."})
+
+    # ── Crashes de navegador
+    bc = snap["browser_crashes"] or 0
+    if bc >= 5:
+        recs.append({"level":"warning","title":f"{bc} crashes de navegador en 24h",
+            "desc":"Archivos de crash detectados.",
+            "action":"Limpia el perfil del navegador o reinstálalo."})
+
+    # ── Servicios en crash loop
+    loops = conn.execute(
+        f"SELECT COUNT(DISTINCT provider) FROM events WHERE user_id=? AND event_id IN (7031,7034,7023,7024) AND time_created > datetime('now','-6 hours'){hf}",
+        [uid]+hp
+    ).fetchone()[0]
+    if loops > 0:
+        recs.append({"level":"warning",
+            "title":f"{'Un servicio' if loops==1 else f'{loops} servicios'} en crash loop",
+            "desc":"Servicio(s) de Windows reiniciándose repetidamente.",
+            "action":"Revisa la sección Incidentes para el diagnóstico detallado."})
+
+    conn.close()
+
+    if not recs:
+        recs.append({"level":"ok","title":"Todo en orden",
+            "desc":"No se detectaron problemas en tu sistema.","action":""})
+
+    order = {"urgent":0,"warning":1,"info":2,"ok":3}
+    recs.sort(key=lambda r: order.get(r["level"], 9))
+    return {"recommendations": recs}
+
 @app.get("/api/issues")
 def get_issues(secret: str = Query(...)):
     """Detecta patrones problemáticos activos."""
@@ -2266,6 +2430,12 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
       <span class="material-symbols-outlined text-[18px]">crisis_alert</span>Incidentes
     </a>
     <a class="flex items-center gap-3 p-2.5 rounded-xl font-headline uppercase text-xs tracking-widest transition-all cursor-pointer"
+       style="color:rgba(198,198,203,.6)" href="#sec-recs"
+       onmouseover="this.style.background='rgba(32,31,31,1)';this.style.color='#e5e2e1'"
+       onmouseout="this.style.background='';this.style.color='rgba(198,198,203,.6)'">
+      <span class="material-symbols-outlined text-[18px]">lightbulb</span>Recomendaciones
+    </a>
+    <a class="flex items-center gap-3 p-2.5 rounded-xl font-headline uppercase text-xs tracking-widest transition-all cursor-pointer"
        style="color:rgba(198,198,203,.6)" href="#sec-settings"
        onmouseover="this.style.background='rgba(32,31,31,1)';this.style.color='#e5e2e1'"
        onmouseout="this.style.background='';this.style.color='rgba(198,198,203,.6)'">
@@ -2548,6 +2718,22 @@ body{background:#131313;color:#e5e2e1;font-family:'Inter',sans-serif}
         </table>
         <div id="empty" class="py-16 text-center text-sm font-body" style="display:none;color:rgba(198,198,203,.2)">
           Sin eventos registrados.
+        </div>
+      </div>
+    </section>
+
+    <!-- ── SECTION: Recommendations ── -->
+    <section id="sec-recs">
+      <div class="flex items-center gap-4 mb-6">
+        <h2 class="font-headline text-lg font-bold text-on-surface">Recomendaciones</h2>
+        <div class="flex-1 h-px" style="background:rgba(69,71,75,.15)"></div>
+        <button onclick="loadRecs()" class="text-[10px] font-headline font-bold tracking-widest uppercase py-2 px-4 rounded-full bg-surface-container-high text-on-surface transition-all"
+          onmouseover="this.style.background='#00e475';this.style.color='#003918'"
+          onmouseout="this.style.background='';this.style.color=''">↻ Actualizar</button>
+      </div>
+      <div id="recs-list" class="grid gap-4" style="grid-template-columns:repeat(auto-fill,minmax(300px,1fr))">
+        <div class="rounded-2xl p-5" style="background:#161616;border:1px solid rgba(69,71,75,.2)">
+          <p class="text-sm" style="color:rgba(198,198,203,.3)">Cargando…</p>
         </div>
       </div>
     </section>
@@ -3071,6 +3257,43 @@ function toggleAR() {
 load();
 loadSettings();
 loadMachines();
+loadRecs();
+
+/* ── Recommendations ─────────────────────────────────────────────── */
+function loadRecs() {
+  const path = currentMachine
+    ? "/api/recommendations?hostname=" + encodeURIComponent(currentMachine)
+    : "/api/recommendations";
+  api(path).then(data => {
+    const recs = data.recommendations || [];
+    const cfg = {
+      urgent:  { bg:"rgba(255,68,68,.07)",  border:"rgba(255,68,68,.2)",  icon:"error",         color:"#ff6b6b",  label:"Urgente" },
+      warning: { bg:"rgba(250,189,0,.06)",  border:"rgba(250,189,0,.2)",  icon:"warning",       color:"#fabd00",  label:"Atención" },
+      info:    { bg:"rgba(56,189,248,.06)", border:"rgba(56,189,248,.2)", icon:"info",           color:"#38bdf8",  label:"Info" },
+      ok:      { bg:"rgba(0,228,117,.06)",  border:"rgba(0,228,117,.2)",  icon:"check_circle",  color:"#00e475",  label:"OK" },
+    };
+    document.getElementById("recs-list").innerHTML = recs.map(r => {
+      const c = cfg[r.level] || cfg.info;
+      return `
+      <div class="rounded-2xl p-5 flex flex-col gap-3" style="background:${c.bg};border:1px solid ${c.border}">
+        <div class="flex items-center gap-2">
+          <span class="material-symbols-outlined text-lg" style="color:${c.color};font-variation-settings:'FILL' 1">${c.icon}</span>
+          <span class="text-[10px] font-headline font-bold uppercase tracking-widest" style="color:${c.color}">${c.label}</span>
+        </div>
+        <div>
+          <p class="font-headline font-semibold text-sm text-on-surface mb-1">${esc(r.title)}</p>
+          <p class="text-xs" style="color:rgba(198,198,203,.5);line-height:1.6">${esc(r.desc)}</p>
+        </div>
+        ${r.action ? `<div class="rounded-xl px-4 py-3 text-xs" style="background:rgba(0,0,0,.25);color:rgba(198,198,203,.6);line-height:1.6">
+          <span style="color:${c.color};font-weight:600">→ </span>${esc(r.action)}
+        </div>` : ""}
+      </div>`;
+    }).join("");
+  }).catch(() => {
+    document.getElementById("recs-list").innerHTML =
+      `<p class="text-sm" style="color:rgba(198,198,203,.3)">Error al cargar recomendaciones.</p>`;
+  });
+}
 
 /* ── Settings ────────────────────────────────────────────────────── */
 async function loadSettings() {
