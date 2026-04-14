@@ -2589,7 +2589,7 @@ body.demo-mode #main-content { padding-top: 36px; }
   #mob-header { display: none !important; }
   #mob-overlay { display: none !important; }
   #demo-banner { display: none !important; }
-  #mob-view { display: block !important; }
+  #mob-view { display: block !important; width: 100%; min-width: 0; }
   #mob-bottom-nav { display: flex !important; }
 }
 @media (min-width: 768px) {
