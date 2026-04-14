@@ -1490,6 +1490,7 @@ def admin_delete_user(user_id: int, secret: str = Query(...)):
 
 # ── Registro ─────────────────────────────────────────────────────────────────
 @app.get("/register", response_class=HTMLResponse)
+@app.get("/vigil/register", response_class=HTMLResponse)
 def register_page():
     return REGISTER_HTML.replace("__BASE__", BASE_PATH)
 
@@ -1915,7 +1916,7 @@ def get_version():
 @app.get("/vigil", response_class=HTMLResponse)
 @app.get("/vigil/", response_class=HTMLResponse)
 def landing():
-    return LANDING_HTML.replace("__BASE__", BASE_PATH).replace("__DOWNLOAD__", CLIENT_DOWNLOAD_URL).replace("__VERSION__", CLIENT_VERSION)
+    return LANDING_HTML.replace("__BASE__", BASE_PATH).replace("__REGISTER__", "/vigil/register").replace("__DOWNLOAD__", CLIENT_DOWNLOAD_URL).replace("__VERSION__", CLIENT_VERSION)
 
 LANDING_HTML = r"""<!DOCTYPE html>
 <html lang="es">
@@ -1976,7 +1977,7 @@ tailwind.config = {
       <a href="#features" class="hover:text-white transition-colors hidden sm:block">Características</a>
       <a href="#how" class="hover:text-white transition-colors hidden sm:block">Cómo funciona</a>
       <a href="__BASE__/" class="hover:text-white transition-colors">Acceder</a>
-      <a href="__BASE__/register" class="bg-brand text-[#003918] font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-all">
+      <a href="__REGISTER__" class="bg-brand text-[#003918] font-semibold px-5 py-2 rounded-lg hover:brightness-110 transition-all">
         Crear cuenta
       </a>
     </div>
@@ -2011,7 +2012,7 @@ tailwind.config = {
     con diagnóstico por IA y alertas en Telegram.
   </p>
   <div class="flex flex-col sm:flex-row gap-4 justify-center">
-    <a href="__BASE__/register"
+    <a href="__REGISTER__"
        class="bg-brand text-[#003918] font-bold text-lg px-10 py-4 rounded-xl hover:brightness-110 transition-all shadow-lg shadow-brand/20">
       Crear cuenta gratis
     </a>
@@ -2184,7 +2185,7 @@ tailwind.config = {
     Gratis. Sin instalación de servidor. Listo en menos de 2 minutos.
   </p>
   <div class="flex flex-col sm:flex-row gap-4 justify-center relative">
-    <a href="__BASE__/register"
+    <a href="__REGISTER__"
        class="bg-brand text-[#003918] font-bold text-xl px-14 py-5 rounded-2xl hover:brightness-110 transition-all shadow-xl shadow-brand/25 inline-block">
       Crear cuenta gratis
     </a>
