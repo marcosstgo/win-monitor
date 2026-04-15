@@ -4005,16 +4005,22 @@ function loadMachines() {
 }
 
 /* ── Events: grouped / flat ──────────────────────────────────────── */
-let groupedMode = false;
+let groupedMode = localStorage.getItem("vigil-grouped") !== "0";
 const openGroups = new Set();
 
 function toggleGrouped() {
   groupedMode = !groupedMode;
-  const btn = document.getElementById("btn-group");
-  btn.style.background = groupedMode ? "#00e475" : "";
-  btn.style.color      = groupedMode ? "#003918"  : "";
+  localStorage.setItem("vigil-grouped", groupedMode ? "1" : "0");
+  _applyGroupBtn();
   load();
 }
+function _applyGroupBtn() {
+  const btn = document.getElementById("btn-group");
+  if (!btn) return;
+  btn.style.background = groupedMode ? "#00e475" : "";
+  btn.style.color      = groupedMode ? "#003918"  : "";
+}
+document.addEventListener("DOMContentLoaded", _applyGroupBtn);
 
 function _evtRow(e, compact) {
   const lvlStyle = e.level===1
